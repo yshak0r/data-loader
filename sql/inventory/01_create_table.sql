@@ -8,3 +8,4 @@
 -- The application will execute this script to prepare [FIN].[KAS_DC_LOADS].
 -- ============================================================================
 
+
