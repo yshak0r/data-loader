@@ -1,13 +1,4 @@
--- ============================================================================
--- DC Loader - Inventory Staging Table DDL
--- Domain: inventory
--- Slot: create_table
--- Target: [FIN].[KAS_DC_LOADS]
---
--- [PLACEHOLDER] Paste your custom DDL script below.
--- The application will execute this script to prepare [FIN].[KAS_DC_LOADS].
--- ============================================================================
-
+/****** Object:  Table [FIN].[KAS_DC_LOADS]  Schema & Table Definition ******/
 -- Ensure schema FIN exists
 IF NOT EXISTS (SELECT * FROM sys.schemas WHERE name = 'FIN')
 BEGIN
@@ -16,7 +7,7 @@ END
 GO
 
 -- Create [FIN].[KAS_DC_LOADS] if not exists
-IF OBJECT_ID(N'[FIN].[KAS_DC_LOADS]', N'U') IS NULL
+IF NOT EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[FIN].[KAS_DC_LOADS]') AND type in (N'U'))
 BEGIN
     CREATE TABLE [FIN].[KAS_DC_LOADS](
         [GEM_DBKEY] [int] IDENTITY(1,1) NOT NULL,
@@ -47,6 +38,39 @@ BEGIN
     CREATE NONCLUSTERED INDEX [IX_KAS_DC_LOADS_STATUS] ON [FIN].[KAS_DC_LOADS] ([STATUS_FLAG]) INCLUDE ([GEM_DBKEY], [PART_CODE], [DC_LICENSE_PLATE_ID]);
     CREATE NONCLUSTERED INDEX [IX_KAS_DC_LOADS_LPN] ON [FIN].[KAS_DC_LOADS] ([DC_LICENSE_PLATE_ID]);
     CREATE NONCLUSTERED INDEX [IX_KAS_DC_LOADS_PART_LOT] ON [FIN].[KAS_DC_LOADS] ([PART_CODE], [IC_LOT_NUMBER]);
+END
+ELSE
+BEGIN
+    -- Alter existing table to add any missing columns safely
+    IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[FIN].[KAS_DC_LOADS]') AND name = 'DC_LICENSE_PLATE_LINE')
+        ALTER TABLE [FIN].[KAS_DC_LOADS] ADD [DC_LICENSE_PLATE_LINE] [smallint] NOT NULL CONSTRAINT [DF_KAS_DC_LOADS_DC_LICENSE_PLATE_LINE] DEFAULT ((0));
+
+    IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[FIN].[KAS_DC_LOADS]') AND name = 'UNIT_COST')
+        ALTER TABLE [FIN].[KAS_DC_LOADS] ADD [UNIT_COST] [numeric](20, 6) NULL;
+
+    IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[FIN].[KAS_DC_LOADS]') AND name = 'IC_VENDOR_LOT_NUMBER')
+        ALTER TABLE [FIN].[KAS_DC_LOADS] ADD [IC_VENDOR_LOT_NUMBER] [varchar](20) NOT NULL CONSTRAINT [DF_KAS_DC_LOADS_IC_VENDOR_LOT_NUMBER] DEFAULT (' ');
+
+    IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[FIN].[KAS_DC_LOADS]') AND name = 'BEST_BEFORE_DATE')
+        ALTER TABLE [FIN].[KAS_DC_LOADS] ADD [BEST_BEFORE_DATE] [datetime] NULL;
+
+    IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[FIN].[KAS_DC_LOADS]') AND name = 'IC_RETEST_DATE')
+        ALTER TABLE [FIN].[KAS_DC_LOADS] ADD [IC_RETEST_DATE] [datetime] NOT NULL CONSTRAINT [DF_KAS_DC_LOADS_IC_RETEST_DATE] DEFAULT ('17-NOV-1858');
+
+    -- Ensure RS_MESSAGE_TEXT is varchar(2000)
+    ALTER TABLE [FIN].[KAS_DC_LOADS] ALTER COLUMN [RS_MESSAGE_TEXT] [varchar](2000) NOT NULL;
+END
+GO
+
+-- Ensure synonym exists so unqualified references to KAS_DC_LOADS resolve properly
+IF NOT EXISTS (SELECT * FROM sys.synonyms WHERE name = 'KAS_DC_LOADS')
+   AND NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'KAS_DC_LOADS' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+    BEGIN TRY
+        EXEC('CREATE SYNONYM [dbo].[KAS_DC_LOADS] FOR [FIN].[KAS_DC_LOADS]');
+    END TRY
+    BEGIN CATCH
+    END CATCH
 END
 GO
 

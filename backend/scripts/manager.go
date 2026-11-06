@@ -1,10 +1,14 @@
 package scripts
 
 import (
+	"embed"
 	"strings"
 	"sync"
 	"time"
 )
+
+//go:embed sql/*.sql
+var embeddedSqlFS embed.FS
 
 // ScriptSlot represents one of the customizable SQL script slots.
 type ScriptSlot string
@@ -44,6 +48,56 @@ func NewManager() *Manager {
 	}
 }
 
+// getFilenameForSlot returns the .sql filename for a given domain and slot.
+func getFilenameForSlot(domain string, slot ScriptSlot) string {
+	prefix := ""
+	if domain == "sales_orders" {
+		prefix = "so_"
+	}
+	switch slot {
+	case SlotCreateTable:
+		return prefix + "01_create_table.sql"
+	case SlotDryRun:
+		return prefix + "02_dry_run_validation.sql"
+	case SlotLoader:
+		return prefix + "03_execute_loader.sql"
+	case SlotCleanTables:
+		if domain == "sales_orders" {
+			return prefix + "05_clean_tables.sql"
+		}
+		return "05_clean_inventory_tables.sql"
+	}
+	return ""
+}
+
+// isPlaceholderOnly returns true when the SQL content only contains comments/blanks — no real SQL.
+func isPlaceholderOnly(content string) bool {
+	for _, line := range strings.Split(content, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "--") {
+			continue
+		}
+		return false // found real SQL
+	}
+	return true
+}
+
+// readEmbeddedScript reads an embedded .sql file; returns "" if missing, unreadable, or placeholder-only.
+func readEmbeddedScript(filename string) string {
+	if filename == "" {
+		return ""
+	}
+	data, err := embeddedSqlFS.ReadFile("sql/" + filename)
+	if err != nil {
+		return ""
+	}
+	content := strings.TrimSpace(string(data))
+	if isPlaceholderOnly(content) {
+		return ""
+	}
+	return content
+}
+
 func normalizeDomain(domain string) string {
 	d := strings.ToLower(strings.TrimSpace(domain))
 	if d == "sales_orders" || d == "so" {
@@ -56,9 +110,18 @@ func makeKey(domain string, slot ScriptSlot) string {
 	return normalizeDomain(domain) + ":" + string(slot)
 }
 
-// GetDefaultScript returns the hardcoded default SQL content for a domain and slot.
+// GetDefaultScript returns the SQL content for a domain+slot.
+// Priority: embedded .sql file (if non-placeholder) → hardcoded Go constant fallback.
 func (m *Manager) GetDefaultScript(domain string, slot ScriptSlot) string {
 	dom := normalizeDomain(domain)
+
+	// 1. Try the embedded .sql file first
+	filename := getFilenameForSlot(dom, slot)
+	if embedded := readEmbeddedScript(filename); embedded != "" {
+		return embedded
+	}
+
+	// 2. Fall back to hardcoded Go string constants
 	if dom == "sales_orders" {
 		switch slot {
 		case SlotCreateTable:
