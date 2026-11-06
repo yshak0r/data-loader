@@ -52,6 +52,104 @@ BEGIN
     CREATE NONCLUSTERED INDEX [IX_KAS_DC_LOADS_LPN] ON [FIN].[KAS_DC_LOADS] ([DC_LICENSE_PLATE_ID] ASC);
     CREATE NONCLUSTERED INDEX [IX_KAS_DC_LOADS_WH_PART] ON [FIN].[KAS_DC_LOADS] ([WAREHOUSE] ASC, [PART_CODE] ASC);
 END
+
+-- Create [FIN].[RS_UOM_CONVERSION] function if it does not exist
+IF OBJECT_ID(N'[FIN].[RS_UOM_CONVERSION]', N'FN') IS NULL
+BEGIN
+    EXEC('
+    CREATE FUNCTION [FIN].[RS_UOM_CONVERSION] 
+    ( 
+       @P_COMPANY_CODE VARCHAR(10), 
+       @P_PROCUDT_CODE VARCHAR(15), 
+       @P_UOM_FROM VARCHAR(4), 
+       @P_UOM_TO VARCHAR(4), 
+       @P_SOURCE_QUANTITY NUMERIC(20,8) 
+    ) 
+    RETURNS NUMERIC(20,8) 
+    AS 
+    BEGIN 
+        DECLARE @RETURNVALUE NUMERIC(20,8); 
+        DECLARE @CONVERSIONFACTOR NUMERIC(20,8); 
+        DECLARE @CONVERSIONMETHOD VARCHAR(1); 
+        SET @RETURNVALUE = -999999; 
+         
+        IF(@P_UOM_FROM = @P_UOM_TO) 
+        BEGIN 
+            SELECT @RETURNVALUE = @P_SOURCE_QUANTITY 
+        END 
+        ELSE 
+        BEGIN 
+            SELECT  
+                @CONVERSIONFACTOR = UOM_CONVERSION_FACTOR, @CONVERSIONMETHOD = SYS_CONV_METHOD 
+            FROM  
+                PART_UOM_CONVERSIONS   
+            WHERE  
+                COMPANY_CODE = @P_COMPANY_CODE AND PART_CODE = @P_PROCUDT_CODE 
+                AND UNIT_FROM = @P_UOM_FROM AND UNIT_TO = @P_UOM_TO;
+     
+            IF(@CONVERSIONMETHOD IS NOT NULL) 
+            BEGIN 
+                SELECT @RETURNVALUE = ( 
+                    CASE WHEN @CONVERSIONMETHOD = ''D'' THEN @P_SOURCE_QUANTITY/@CONVERSIONFACTOR 
+                         WHEN @CONVERSIONMETHOD = ''M'' THEN @P_SOURCE_QUANTITY*@CONVERSIONFACTOR END);				 
+            END 
+            ELSE 
+            BEGIN 
+                SELECT 
+                    @CONVERSIONFACTOR = UOM_CONVERSION_FACTOR, @CONVERSIONMETHOD = SYS_CONV_METHOD 
+                FROM 
+                    PART_UOM_CONVERSIONS   
+                WHERE  
+                    COMPANY_CODE = @P_COMPANY_CODE AND PART_CODE = @P_PROCUDT_CODE 
+                    AND UNIT_FROM = @P_UOM_TO AND UNIT_TO = @P_UOM_FROM;
+     
+                IF(@CONVERSIONMETHOD IS NOT NULL) 
+                BEGIN 
+                    SELECT @RETURNVALUE = ( 
+                        CASE WHEN @CONVERSIONMETHOD = ''D'' THEN @P_SOURCE_QUANTITY*@CONVERSIONFACTOR   
+                             WHEN @CONVERSIONMETHOD = ''M'' THEN @P_SOURCE_QUANTITY/@CONVERSIONFACTOR END); 
+                END 
+                ELSE 
+                BEGIN 
+                    SELECT  
+                        @CONVERSIONFACTOR = UOM_CONVERSION_FACTOR, @CONVERSIONMETHOD = SYS_CONV_METHOD 
+                    FROM 
+                        PART_UOM_CONVERSIONS   
+                    WHERE 
+                        COMPANY_CODE <> @P_COMPANY_CODE AND PART_CODE <> @P_PROCUDT_CODE  
+                        AND UNIT_FROM = @P_UOM_FROM AND UNIT_TO = @P_UOM_TO;
+     
+                    IF(@CONVERSIONMETHOD IS NOT NULL) 
+                    BEGIN 
+                        SELECT @RETURNVALUE = ( 
+                            CASE WHEN @CONVERSIONMETHOD = ''D'' THEN @P_SOURCE_QUANTITY/@CONVERSIONFACTOR 
+                                 WHEN @CONVERSIONMETHOD = ''M'' THEN @P_SOURCE_QUANTITY*@CONVERSIONFACTOR END); 
+                    END							 
+                    ELSE 
+                    BEGIN 
+                        SELECT  
+                            @CONVERSIONFACTOR = UOM_CONVERSION_FACTOR, @CONVERSIONMETHOD = SYS_CONV_METHOD 
+                        FROM 
+                            PART_UOM_CONVERSIONS   
+                        WHERE 
+                            COMPANY_CODE <> @P_COMPANY_CODE AND PART_CODE <> @P_PROCUDT_CODE 
+                            AND UNIT_FROM = @P_UOM_TO AND UNIT_TO = @P_UOM_FROM;
+     
+                        IF(@CONVERSIONMETHOD IS NOT NULL) 
+                        BEGIN 
+                            SELECT @RETURNVALUE = ( 
+                                CASE WHEN @CONVERSIONMETHOD = ''D'' THEN @P_SOURCE_QUANTITY*@CONVERSIONFACTOR 
+                                     WHEN @CONVERSIONMETHOD = ''M'' THEN @P_SOURCE_QUANTITY/@CONVERSIONFACTOR END); 
+                        END; 
+                    END; 
+                END;													 
+            END; 
+        END; 
+         
+        RETURN @RETURNVALUE; 
+    END
+    ');
+END
 `
 
 const DefaultDcDryRunSQL = `
