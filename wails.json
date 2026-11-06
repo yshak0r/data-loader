@@ -9,5 +9,12 @@
   "author": {
     "name": "Ross ERP Modernization Team",
     "email": "support@ross.erp"
+  },
+  "info": {
+    "companyName": "Ross ERP",
+    "productName": "Ross DC Loader",
+    "productVersion": "1.0.0",
+    "copyright": "Copyright © 2026 Ross ERP. All rights reserved.",
+    "comments": "DC Inventory and Sales Order Loader for Ross ERP"
   }
 }
