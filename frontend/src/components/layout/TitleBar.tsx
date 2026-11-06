@@ -10,6 +10,7 @@ interface TitleBarProps {
   division?: string;
   dbConnected: boolean;
   dbHost: string;
+  dbDatabase?: string;
   domain: LoaderDomain;
   onDomainChange: (domain: LoaderDomain) => void;
   onOpenDbConfig: () => void;
@@ -25,6 +26,7 @@ export const TitleBar: React.FC<TitleBarProps> = ({
   division = '1',
   dbConnected,
   dbHost,
+  dbDatabase,
   domain,
   onDomainChange,
   onOpenDbConfig,
@@ -93,7 +95,11 @@ export const TitleBar: React.FC<TitleBarProps> = ({
               ? 'bg-secondary/60 hover:bg-secondary border-border text-foreground'
               : 'bg-rose-500/10 hover:bg-rose-500/20 border-rose-500/30 text-rose-600 dark:text-rose-400'
           }`}
-          title="Click to configure and test database connection"
+          title={
+            dbConnected
+              ? `Connected to ${dbHost}${dbDatabase ? ` / [${dbDatabase}]` : ''} - Click to configure connection`
+              : 'Click to configure and test database connection'
+          }
         >
           {dbConnected ? (
             <span className="w-2 h-2 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]" />
@@ -102,7 +108,17 @@ export const TitleBar: React.FC<TitleBarProps> = ({
           )}
 
           <span className="font-mono text-xs">
-            {dbConnected ? `SQL: ${dbHost}` : 'SQL DISCONNECTED'}
+            {dbConnected ? (
+              <span className="flex items-center gap-1">
+                <span className="text-muted-foreground">SQL:</span>
+                <span className="font-semibold text-foreground">{dbHost}</span>
+                {dbDatabase && (
+                  <span className="text-muted-foreground font-normal">[{dbDatabase}]</span>
+                )}
+              </span>
+            ) : (
+              'SQL DISCONNECTED'
+            )}
           </span>
 
           <span className="w-1 h-1 rounded-full bg-border" />

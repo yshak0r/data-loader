@@ -139,6 +139,7 @@ interface ConnectionDialogProps {
   onConnectionStatusChange: (connected: boolean) => void;
   dbConnected?: boolean;
   onDisconnect?: () => Promise<void> | void;
+  domain?: 'inventory' | 'sales_orders';
 }
 
 export const ConnectionDialog: React.FC<ConnectionDialogProps> = ({
@@ -149,6 +150,7 @@ export const ConnectionDialog: React.FC<ConnectionDialogProps> = ({
   onConnectionStatusChange,
   dbConnected = false,
   onDisconnect,
+  domain = 'inventory',
 }) => {
   const [profiles, setProfiles] = useState<DatabaseConfig[]>([]);
   const [selectedProfileKey, setSelectedProfileKey] = useState<string>('__new__');
@@ -197,24 +199,33 @@ export const ConnectionDialog: React.FC<ConnectionDialogProps> = ({
       setImportSuccessBanner(null);
       setXmlError('');
 
-      // Find if active config matches an existing saved profile
+      // Prioritize the currently active/connected configuration passed via props
+      // If config has host and database, search if it matches an existing profile or present it directly
+      const hasActiveConfig = !!(config && (config.host?.trim() || config.database?.trim()));
+
       const matched = saved.find(
         (p) =>
-          p.profileName === config.profileName ||
-          (p.host === config.host && p.database === config.database && p.user === config.user)
+          (config.profileName && p.profileName === config.profileName) ||
+          (config.host && p.host === config.host && p.database === config.database && (!config.user || p.user === config.user))
       );
 
       if (matched) {
         setSelectedProfileKey(matched.profileName);
-        setFormData({ ...matched });
-        setPortInput(String(matched.port || 1433));
+        // Blend matched profile with any current config values (like credentials/session state)
+        setFormData({ ...matched, ...config });
+        setPortInput(String(config.port || matched.port || 1433));
+      } else if (hasActiveConfig) {
+        // Active configuration is in use (e.g., custom host or connection not yet saved as profile)
+        setSelectedProfileKey('__new__');
+        setFormData({ ...config });
+        setPortInput(String(config.port || 1433));
       } else if (saved.length > 0) {
-        // Default to the first saved profile if available
+        // Disconnected and no specific config: default to first saved profile
         setSelectedProfileKey(saved[0].profileName);
         setFormData({ ...saved[0] });
         setPortInput(String(saved[0].port || 1433));
       } else {
-        // Fall back to provided config
+        // Fall back to provided config or defaults
         setSelectedProfileKey('__new__');
         setFormData({ ...config });
         setPortInput(String(config.port || 1433));
@@ -528,7 +539,15 @@ export const ConnectionDialog: React.FC<ConnectionDialogProps> = ({
                   SQL Server Connection
                 </DialogTitle>
                 <DialogDescription className="text-xs text-muted-foreground">
-                  Target catalog staging table: <code className="text-foreground font-mono">[FIN].[KAS_DC_LOADS]</code>
+                  Target catalog staging table:{' '}
+                  <code className="text-foreground font-mono">
+                    {domain === 'sales_orders' ? '[FIN].[KAS_SO_LOADS]' : '[FIN].[KAS_DC_LOADS]'}
+                  </code>
+                  {dbConnected && config.host && (
+                    <span className="ml-1.5 text-emerald-600 dark:text-emerald-400 font-mono">
+                      (Active: {config.host}{config.database ? ` / [${config.database}]` : ''})
+                    </span>
+                  )}
                 </DialogDescription>
               </div>
             </div>

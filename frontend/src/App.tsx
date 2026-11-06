@@ -52,18 +52,26 @@ export const App: React.FC = () => {
     machineId: '',
   });
   const [dbConnected, setDbConnected] = useState(false);
-  const [dbConfig, setDbConfig] = useState<DatabaseConfig>({
-    profileName: 'Primary SQL Server',
-    host: 'localhost',
-    port: 1433,
-    database: 'fin_demo',
-    user: 'fin_demo',
-    password: '',
-    companyCode: 'CORP',
-    authType: 'sql',
-    encrypt: false,
-    trustServerCertificate: true,
-    division: '1',
+  const [dbConfig, setDbConfig] = useState<DatabaseConfig>(() => {
+    try {
+      const stored = localStorage.getItem('dc_loader_last_active_config');
+      if (stored) {
+        return JSON.parse(stored);
+      }
+    } catch (_) {}
+    return {
+      profileName: 'Primary SQL Server',
+      host: 'localhost',
+      port: 1433,
+      database: 'fin_demo',
+      user: 'fin_demo',
+      password: '',
+      companyCode: 'CORP',
+      authType: 'sql',
+      encrypt: false,
+      trustServerCertificate: true,
+      division: '1',
+    };
   });
 
   // Query staging table directly from SQL Server (domain-aware)
@@ -336,6 +344,7 @@ export const App: React.FC = () => {
         companyCode={dbConfig.companyCode}
         dbConnected={dbConnected}
         dbHost={dbConfig.host}
+        dbDatabase={dbConfig.database}
         onOpenDbConfig={() => setIsDbConfigOpen(true)}
         onOpenCleanDialog={() => setIsCleanDialogOpen(true)}
         onOpenClearStagedDialog={() => setIsClearStagedDialogOpen(true)}
@@ -488,10 +497,14 @@ export const App: React.FC = () => {
         open={isDbConfigOpen}
         onOpenChange={setIsDbConfigOpen}
         config={dbConfig}
+        domain={domain}
         onSaveConfig={async (cfg) => {
           const res = await dbClient.connect(cfg);
           if (res.success) {
             setDbConfig(cfg);
+            try {
+              localStorage.setItem('dc_loader_last_active_config', JSON.stringify(cfg));
+            } catch (_) {}
             setDbConnected(true);
             await refreshGridData();
             return true;
