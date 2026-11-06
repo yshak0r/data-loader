@@ -91,18 +91,7 @@ export const CleanDatabaseDialog: React.FC<CleanDatabaseDialogProps> = ({
     }
   };
 
-  const targetTables = [
-    'IC_PRODUCT_STATUS',
-    'IC_LOT_STATUS',
-    'IC_BIN_DETAIL_STATUS',
-    'BIN_LOCATION_DETAILS',
-    'DC_LICENSE_PLATES',
-    'DC_LICENSE_PLATE_LINES',
-    'DC_LICENSE_PLATE_LINE_DETAILS',
-    'IC_QUALITY_DOCS',
-    'IC_QUALITY_DOC_LINES',
-    'IC_QUALITY_DOC_LINE_DETAILS',
-  ];
+
 
   const fetchPreview = async () => {
     if (!dbConnected) return;
@@ -284,20 +273,17 @@ export const CleanDatabaseDialog: React.FC<CleanDatabaseDialogProps> = ({
             )}
           </div>
 
-          {/* 10 Target Tables Grid */}
-          <div className="space-y-2">
-            <span className="text-xs font-semibold text-muted-foreground flex items-center gap-1.5">
-              <TableIcon className="w-3.5 h-3.5" /> 10 Target Inventory Tables:
-            </span>
-            <div className="grid grid-cols-2 gap-1.5 text-[11px] font-mono bg-background/50 border border-border/60 p-2.5 rounded-lg max-h-36 overflow-y-auto">
-              {targetTables.map((tbl, i) => (
-                <div key={tbl} className="flex items-center gap-1.5 text-muted-foreground">
-                  <span className="text-muted-foreground/60 text-[10px] w-4">{i + 1}.</span>
-                  <span className="truncate">{tbl}</span>
-                </div>
-              ))}
+          {/* Target Tables: static list before execution, dynamic breakdown after */}
+          {!result?.success && (
+            <div className="space-y-1.5">
+              <span className="text-xs font-semibold text-muted-foreground flex items-center gap-1.5">
+                <TableIcon className="w-3.5 h-3.5" /> Target Tables (determined by active clean script):
+              </span>
+              <div className="text-[11px] text-muted-foreground bg-background/50 border border-border/60 p-2.5 rounded-lg italic">
+                Table breakdown will be shown here after execution. The scope is determined by the loaded clean script.
+              </div>
             </div>
-          </div>
+          )}
 
           {/* Results Summary if executed */}
           {result && (
@@ -358,6 +344,71 @@ export const CleanDatabaseDialog: React.FC<CleanDatabaseDialogProps> = ({
                       </div>
                     </div>
                   )}
+                </div>
+              )}
+
+              {/* Dynamic Per-Table Breakdown Report */}
+              {result.success && result.tableBreakdown && result.tableBreakdown.length > 0 && (
+                <div className="space-y-2 pt-1">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-semibold text-emerald-900 dark:text-emerald-300 flex items-center gap-1.5">
+                      <TableIcon className="w-3.5 h-3.5" /> Affected Tables Breakdown
+                    </span>
+                    <span className="text-[11px] text-muted-foreground font-medium">
+                      {result.tableBreakdown.filter((t) => t.rowsDeleted > 0).length} of{' '}
+                      {result.tableBreakdown.length} table(s) affected
+                    </span>
+                  </div>
+
+                  <div className="rounded-lg border border-emerald-300/70 dark:border-emerald-500/30 overflow-hidden bg-background/90 shadow-sm">
+                    <div className="max-h-56 overflow-y-auto">
+                      <table className="w-full text-left text-xs border-collapse">
+                        <thead>
+                          <tr className="bg-emerald-100/80 dark:bg-emerald-950/70 border-b border-emerald-200 dark:border-emerald-800 text-[11px] font-semibold text-emerald-950 dark:text-emerald-200">
+                            <th className="py-2 px-3">Table Name</th>
+                            <th className="py-2 px-3 text-right">Records Removed</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-border/40 font-mono text-[11px]">
+                          {result.tableBreakdown.map((item, idx) => {
+                            const isAffected = item.rowsDeleted > 0;
+                            return (
+                              <tr
+                                key={item.tableName || idx}
+                                className={`transition-colors ${
+                                  isAffected
+                                    ? 'bg-emerald-50/60 dark:bg-emerald-500/10 hover:bg-emerald-100/50 dark:hover:bg-emerald-500/15'
+                                    : 'text-muted-foreground/70 hover:bg-muted/30'
+                                }`}
+                              >
+                                <td className="py-2 px-3 font-medium flex items-center gap-2">
+                                  <span
+                                    className={`w-2 h-2 rounded-full shrink-0 ${
+                                      isAffected ? 'bg-emerald-500 ring-2 ring-emerald-500/20' : 'bg-muted-foreground/30'
+                                    }`}
+                                  />
+                                  <span className={isAffected ? 'text-foreground font-semibold' : 'text-muted-foreground'}>
+                                    {item.tableName}
+                                  </span>
+                                </td>
+                                <td className="py-2 px-3 text-right">
+                                  <span
+                                    className={`px-2 py-0.5 rounded text-xs ${
+                                      isAffected
+                                        ? 'font-bold text-emerald-700 dark:text-emerald-300 bg-emerald-100 dark:bg-emerald-950/80 border border-emerald-300/50 dark:border-emerald-500/30'
+                                        : 'text-muted-foreground/60'
+                                    }`}
+                                  >
+                                    {item.rowsDeleted.toLocaleString()}
+                                  </span>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
                 </div>
               )}
 

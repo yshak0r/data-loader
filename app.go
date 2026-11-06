@@ -140,7 +140,8 @@ func (a *App) ExportData(filter string, domain string) (string, error) {
 }
 
 func (a *App) CleanInventoryTables() (*models.CleanTableResult, error) {
-	return a.dbManager.CleanInventoryTables(a.ctx)
+	script := a.scriptsMgr.GetScriptContent(scripts.SlotCleanTables)
+	return a.dbManager.CleanInventoryTablesWithScript(a.ctx, script)
 }
 
 func (a *App) GetCleanPreview() (*models.CleanPreview, error) {
