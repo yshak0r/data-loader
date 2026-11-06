@@ -311,14 +311,13 @@ export const ConnectionDialog: React.FC<ConnectionDialogProps> = ({
         message: res.message,
         latencyMs: res.latencyMs,
       });
-      onConnectionStatusChange(res.success);
+      // Note: Test Connection only tests connectivity — it does NOT change the active session connection status.
     } catch (err: any) {
       setTestResult({
         tested: true,
         success: false,
         message: err.message || 'Connection error occurred.',
       });
-      onConnectionStatusChange(false);
     } finally {
       setIsTesting(false);
     }
