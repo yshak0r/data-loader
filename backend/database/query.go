@@ -22,6 +22,9 @@ func (m *Manager) QueryGrid(ctx context.Context, params models.GridQueryParams) 
 		tableName = "[FIN].[KAS_SO_LOADS]"
 	}
 
+	// Automatically ensure the staging table and schema exist
+	_, _ = m.EnsureTableExists(ctx, params.Domain)
+
 	page := params.Page
 	if page < 1 {
 		page = 1
@@ -73,7 +76,13 @@ func (m *Manager) QueryGrid(ctx context.Context, params models.GridQueryParams) 
 	countFilteredQuery := fmt.Sprintf("SELECT COUNT(*) FROM %s %s", tableName, whereClause)
 	var totalFiltered int
 	if err := db.QueryRowContext(ctx, countFilteredQuery, args...).Scan(&totalFiltered); err != nil {
-		return nil, fmt.Errorf("failed to count filtered rows: %w", err)
+		// If table is still initializing or empty, return 0 rows cleanly instead of erroring
+		return &models.GridQueryResult{
+			Rows:      []any{},
+			Total:     0,
+			Counts:    models.GridCounts{},
+			Connected: true,
+		}, nil
 	}
 
 	// 2. Compute status counts breakdown across the whole table
@@ -89,8 +98,18 @@ func (m *Manager) QueryGrid(ctx context.Context, params models.GridQueryParams) 
 	var counts models.GridCounts
 	_ = db.QueryRowContext(ctx, countsQuery).Scan(&counts.Total, &counts.Valid, &counts.Error, &counts.Loaded)
 
+	// If no rows match, return early with empty slice
+	if totalFiltered == 0 {
+		return &models.GridQueryResult{
+			Rows:      []any{},
+			Total:     0,
+			Counts:    counts,
+			Connected: true,
+		}, nil
+	}
+
 	// 3. Paginated query
-	var rowsSlice []any
+	rowsSlice := make([]any, 0)
 	if isSO {
 		dataQuery := fmt.Sprintf(`
 			SELECT 

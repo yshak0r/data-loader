@@ -135,7 +135,7 @@ interface ConnectionDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   config: DatabaseConfig;
-  onSaveConfig: (config: DatabaseConfig) => Promise<boolean>;
+  onSaveConfig: (config: DatabaseConfig) => Promise<{ success: boolean; message?: string } | boolean>;
   onConnectionStatusChange: (connected: boolean) => void;
   dbConnected?: boolean;
   onDisconnect?: () => Promise<void> | void;
@@ -358,18 +358,35 @@ export const ConnectionDialog: React.FC<ConnectionDialogProps> = ({
       port: parseInt(portInput, 10) || 1433,
     };
 
+    if (!targetConfig.host?.trim() || !targetConfig.database?.trim()) {
+      setTestResult({
+        tested: true,
+        success: false,
+        message: 'Host server address and Database name are required to connect.',
+      });
+      setIsConnecting(false);
+      return;
+    }
+
     try {
-      const success = await onSaveConfig(targetConfig);
-      if (success) {
+      const res = await onSaveConfig(targetConfig);
+      const isSuccess = typeof res === 'boolean' ? res : Boolean(res?.success);
+      const errMsg =
+        typeof res === 'object' && res?.message
+          ? res.message
+          : 'Connection failed. Please verify credentials, host, and that SQL Server TCP/IP is active.';
+
+      if (isSuccess) {
         if (targetConfig.profileName.trim()) {
           upsertProfile(targetConfig);
         }
+        onConnectionStatusChange(true);
         onOpenChange(false);
       } else {
         setTestResult({
           tested: true,
           success: false,
-          message: 'Connection failed. Please verify credentials, host, and that SQL Server TCP/IP is active.',
+          message: errMsg,
         });
       }
     } catch (err: any) {

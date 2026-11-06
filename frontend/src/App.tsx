@@ -91,12 +91,18 @@ export const App: React.FC = () => {
         domain,
       });
       setDbConnected(res.connected);
-      setGridRows(res.rows);
-      setTotalRows(res.total);
-      setCounts(res.counts);
+      setGridRows(res.rows || []);
+      setTotalRows(res.total || 0);
+      setCounts(res.counts || { total: 0, valid: 0, error: 0, loaded: 0 });
     } catch (err) {
-      console.error('Error querying SQL Server grid:', err);
-      setDbConnected(false);
+      console.warn('Grid query notice:', err);
+      // Verify actual connectivity so a staging table or grid query issue does not falsely mark DB as offline
+      try {
+        const s = await dbClient.getStatus();
+        setDbConnected(s.connected);
+      } catch (_) {
+        setDbConnected(false);
+      }
     } finally {
       setIsLoading(false);
     }
@@ -528,12 +534,11 @@ export const App: React.FC = () => {
               localStorage.setItem('dc_loader_last_active_config', JSON.stringify(cfg));
             } catch (_) {}
             setDbConnected(true);
-            await refreshGridData();
-            return true;
+            refreshGridData().catch((err) => console.warn('Grid refresh notice:', err));
+            return { success: true };
           } else {
             setDbConnected(false);
-            alert(`SQL Server connection failed: ${res.message}`);
-            return false;
+            return { success: false, message: res.message };
           }
         }}
         onConnectionStatusChange={(status) => setDbConnected(status)}
