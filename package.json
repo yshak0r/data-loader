@@ -1,0 +1,22 @@
+{
+  "name": "ross-dc-loader-wails",
+  "version": "1.0.0",
+  "description": "Ross ERP Data Capture and Sales Order Loader Desktop Application (Wails + Go + React)",
+  "private": true,
+  "scripts": {
+    "dev": "wails dev -m -skipbindings",
+    "build:frontend": "cd frontend && npm run build",
+    "build": "cd frontend && npm run build && cd .. && wails build -m -skipbindings -s",
+    "generate": "wails generate module"
+  },
+  "keywords": [
+    "ross-erp",
+    "wails",
+    "go",
+    "react",
+    "shadcn-ui",
+    "mssql"
+  ],
+  "author": "Antigravity",
+  "license": "UNLICENSED"
+}
