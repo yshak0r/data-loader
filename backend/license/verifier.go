@@ -17,7 +17,7 @@ import (
 )
 
 const embeddedPublicKeyPEM = `-----BEGIN PUBLIC KEY-----
-MCowBQYDK2VwAyEAXZzw5kUMdGQMy8S9XRzZM3fqUbSzjIQ/skZVOTcKLfY=
+MCowBQYDK2VwAyEA6JgTxNP7JoM30qOwpKDI/251ovwh36oyFRtdNoWK4+I=
 -----END PUBLIC KEY-----`
 
 var licMu sync.RWMutex

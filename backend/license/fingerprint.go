@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 )
 
 const integritySalt = "ROSS_ERP_ENTERPRISE_HARDWARE_INTEGRITY_SALT_2026_V1"
@@ -102,8 +103,13 @@ func getRawHardwareTokens() []string {
 	return tokens
 }
 
+// execPowerShellCommand runs a PowerShell command completely hidden — no console window
+// is created, even when the app itself was launched without a console.
 func execPowerShellCommand(cmd string) string {
-	out, err := exec.Command("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", cmd).Output()
+	c := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass", "-Command", cmd)
+	// HideWindow ensures no console is created on Windows regardless of parent process type.
+	c.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	out, err := c.Output()
 	if err != nil {
 		return ""
 	}
@@ -111,7 +117,9 @@ func execPowerShellCommand(cmd string) string {
 }
 
 func queryRegistryMachineGuid() string {
-	out, err := exec.Command("reg", "query", "HKLM\\SOFTWARE\\Microsoft\\Cryptography", "/v", "MachineGuid").Output()
+	c := exec.Command("reg", "query", `HKLM\SOFTWARE\Microsoft\Cryptography`, "/v", "MachineGuid")
+	c.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	out, err := c.Output()
 	if err != nil {
 		return ""
 	}
