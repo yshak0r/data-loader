@@ -122,3 +122,4 @@ func queryRegistryMachineGuid() string {
 	}
 	return ""
 }
+

@@ -158,3 +158,4 @@ func (m *Manager) ClearAllScripts() map[ScriptSlot]ScriptSlotInfo {
 
 	return m.GetAllScriptsConfig()
 }
+

@@ -184,3 +184,4 @@ func ActivateLicense(licenseJSON string) (bool, string, models.LicenseStatus) {
 
 	return true, fmt.Sprintf("Successfully activated for %s!", content.Payload.ClientName), status
 }
+

@@ -134,3 +134,4 @@ func (m *Manager) ExportData(ctx context.Context, filter string, domain string) 
 	writer.Flush()
 	return buf.String(), nil
 }
+
