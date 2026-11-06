@@ -130,6 +130,28 @@ export const App: React.FC = () => {
     } catch (_) {}
   }, []);
 
+  // Auto-connect to the last active database configuration on application launch
+  useEffect(() => {
+    const autoConnect = async () => {
+      try {
+        const stored = localStorage.getItem('dc_loader_last_active_config');
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          if (parsed && parsed.host && parsed.database) {
+            const res = await dbClient.connect(parsed);
+            if (res.success) {
+              setDbConnected(true);
+              await refreshGridData();
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('Auto-connection on startup skipped or failed:', err);
+      }
+    };
+    autoConnect();
+  }, []);
+
   // Listen to Wails streaming upload progress event
   useEffect(() => {
     const cancelProgress = EventsOn('dcload:uploadProgress', (p: { loaded: number }) => {

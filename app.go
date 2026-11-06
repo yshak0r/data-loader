@@ -103,6 +103,15 @@ func (a *App) UploadCsv(filePath string, companyCode string, division string, do
 		}
 	}
 
+	// Automatically ensure the target staging table and schema exist before streaming
+	if ok, errMsg := a.dbManager.EnsureTableExists(a.ctx, domain); !ok {
+		return models.UploadResult{
+			Success: false,
+			Message: fmt.Sprintf("Failed to prepare staging table: %s", errMsg),
+			Domain:  domain,
+		}
+	}
+
 	progressCb := func(loaded int) {
 		runtime.EventsEmit(a.ctx, "dcload:uploadProgress", map[string]int{"loaded": loaded})
 	}

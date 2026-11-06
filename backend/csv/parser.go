@@ -116,7 +116,8 @@ func uploadSoCsv(
 
 	var records []models.KasSoLoadRecord
 	orderLinesMap := make(map[string]int)
-	batchSize := 500
+	// SQL Server supports max 2,100 parameters per query. 100 rows * 15 params = 1,500 parameters (safe).
+	batchSize := 100
 	totalLoaded := 0
 
 	for {
@@ -263,7 +264,8 @@ func uploadDcCsv(
 	idxBestBefore := getIndex(indices, "BEST_BEFORE_DATE", "EXPIRY_DATE")
 
 	var records []models.KasDcLoadRecord
-	batchSize := 500
+	// SQL Server supports max 2,100 parameters per query. 100 rows * 20 params = 2,000 parameters (safe).
+	batchSize := 100
 	totalLoaded := 0
 
 	for {
