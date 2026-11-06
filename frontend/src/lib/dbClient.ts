@@ -360,9 +360,9 @@ class DbClient {
     }
   }
 
-  public async getAllSqlScripts(): Promise<Record<SqlScriptSlot, SqlScriptInfo>> {
+  public async getAllSqlScripts(domain?: LoaderDomain): Promise<Record<SqlScriptSlot, SqlScriptInfo>> {
     try {
-      const res = await App.GetAllSqlScripts();
+      const res = await (App as any).GetAllSqlScripts(domain || 'inventory');
       return res as unknown as Record<SqlScriptSlot, SqlScriptInfo>;
     } catch (err) {
       return {} as Record<SqlScriptSlot, SqlScriptInfo>;
@@ -371,35 +371,43 @@ class DbClient {
 
   public async setSqlScript(
     slot: SqlScriptSlot,
-    data: { name: string; content: string; filePath?: string }
+    data: { name: string; content: string; filePath?: string },
+    domain?: LoaderDomain
   ): Promise<SqlScriptInfo> {
-    const res = await App.SetSqlScript(slot as any, data.content, data.name, data.filePath || '');
+    const res = await (App as any).SetSqlScript(
+      domain || 'inventory',
+      slot as any,
+      data.name,
+      data.filePath || '',
+      data.content
+    );
     return res as unknown as SqlScriptInfo;
   }
 
-  public async resetSqlScript(slot: SqlScriptSlot): Promise<SqlScriptInfo> {
-    const res = await App.ResetSqlScript(slot as any);
+  public async resetSqlScript(slot: SqlScriptSlot, domain?: LoaderDomain): Promise<SqlScriptInfo> {
+    const res = await (App as any).ResetSqlScript(domain || 'inventory', slot as any);
     return res as unknown as SqlScriptInfo;
   }
 
-  public async loadDefaultSqlScript(slot: SqlScriptSlot): Promise<SqlScriptInfo> {
-    return await this.resetSqlScript(slot);
+  public async loadDefaultSqlScript(slot: SqlScriptSlot, domain?: LoaderDomain): Promise<SqlScriptInfo> {
+    return await this.resetSqlScript(slot, domain);
   }
 
-  public async loadAllDefaultSqlScripts(): Promise<Record<SqlScriptSlot, SqlScriptInfo>> {
+  public async loadAllDefaultSqlScripts(domain?: LoaderDomain): Promise<Record<SqlScriptSlot, SqlScriptInfo>> {
+    const dom = domain || 'inventory';
     const slots: SqlScriptSlot[] = ['create_table', 'dry_run', 'loader', 'clean_tables'];
     for (const slot of slots) {
-      await this.resetSqlScript(slot);
+      await this.resetSqlScript(slot, dom);
     }
-    return await this.getAllSqlScripts();
+    return await this.getAllSqlScripts(dom);
   }
 
-  public async clearSqlScript(slot: SqlScriptSlot): Promise<SqlScriptInfo> {
-    return await this.resetSqlScript(slot);
+  public async clearSqlScript(slot: SqlScriptSlot, domain?: LoaderDomain): Promise<SqlScriptInfo> {
+    return await this.resetSqlScript(slot, domain);
   }
 
-  public async clearAllSqlScripts(): Promise<Record<SqlScriptSlot, SqlScriptInfo>> {
-    const res = await App.ClearAllSqlScripts();
+  public async clearAllSqlScripts(domain?: LoaderDomain): Promise<Record<SqlScriptSlot, SqlScriptInfo>> {
+    const res = await (App as any).ClearAllSqlScripts(domain || 'inventory');
     return res as unknown as Record<SqlScriptSlot, SqlScriptInfo>;
   }
 

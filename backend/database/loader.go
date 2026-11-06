@@ -5,16 +5,51 @@ import (
 	"database/sql"
 	"fmt"
 	"math/rand"
+	"strings"
 	"time"
 
 	"dc-loader-wails/backend/models"
 )
 
 // ExecuteDryRun executes batch validation rules against the active staging table.
-func (m *Manager) ExecuteDryRun(ctx context.Context, domain string) (*models.DryRunResult, error) {
+func (m *Manager) ExecuteDryRun(ctx context.Context, domain string, scriptContent string) (*models.DryRunResult, error) {
 	db, _, err := m.GetDB()
 	if err != nil {
 		return nil, err
+	}
+
+	tableName := "[FIN].[KAS_DC_LOADS]"
+	if domain == "sales_orders" {
+		tableName = "[FIN].[KAS_SO_LOADS]"
+	}
+
+	trimmedScript := strings.TrimSpace(scriptContent)
+	if trimmedScript != "" {
+		if err := m.ExecuteSqlBatches(ctx, trimmedScript); err != nil {
+			return &models.DryRunResult{
+				Success: false,
+				Message: fmt.Sprintf("Validation script error: %v", err),
+			}, nil
+		}
+
+		countsQuery := fmt.Sprintf(`
+			SELECT 
+				COUNT(*) AS total,
+				ISNULL(SUM(CASE WHEN STATUS_FLAG = 'V' THEN 1 ELSE 0 END), 0) AS valid,
+				ISNULL(SUM(CASE WHEN STATUS_FLAG = 'E' THEN 1 ELSE 0 END), 0) AS errors,
+				ISNULL(SUM(CASE WHEN STATUS_FLAG = 'L' THEN 1 ELSE 0 END), 0) AS loaded,
+				ISNULL(SUM(CASE WHEN STATUS_FLAG = ' ' THEN 1 ELSE 0 END), 0) AS pending
+			FROM %s
+		`, tableName)
+
+		var c models.DryRunCounts
+		_ = db.QueryRowContext(ctx, countsQuery).Scan(&c.Total, &c.Valid, &c.Errors, &c.Loaded, &c.Pending)
+
+		return &models.DryRunResult{
+			Success: true,
+			Counts:  c,
+			Message: fmt.Sprintf("Validation script executed: %d valid, %d errors out of %d records.", c.Valid, c.Errors, c.Total),
+		}, nil
 	}
 
 	if domain == "sales_orders" {
@@ -252,13 +287,39 @@ func (m *Manager) executeDryRunSo(ctx context.Context, db *sql.DB) (*models.DryR
 }
 
 // ExecuteLoader commits valid staged records to Ross ERP.
-func (m *Manager) ExecuteLoader(ctx context.Context, domain string) (*models.LoaderResult, error) {
+func (m *Manager) ExecuteLoader(ctx context.Context, domain string, scriptContent string) (*models.LoaderResult, error) {
 	db, _, err := m.GetDB()
 	if err != nil {
 		return nil, err
 	}
 
 	batchID := fmt.Sprintf("BATCH-%s-%04d", time.Now().Format("20060102150405"), rand.Intn(10000))
+
+	trimmedScript := strings.TrimSpace(scriptContent)
+	if trimmedScript != "" {
+		if err := m.ExecuteSqlBatches(ctx, trimmedScript); err != nil {
+			return &models.LoaderResult{
+				Success: false,
+				Message: fmt.Sprintf("Loader script error: %v", err),
+			}, nil
+		}
+
+		tableName := "[FIN].[KAS_DC_LOADS]"
+		if domain == "sales_orders" {
+			tableName = "[FIN].[KAS_SO_LOADS]"
+		}
+
+		var loadedCount int
+		_ = db.QueryRowContext(ctx, fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE STATUS_FLAG = 'L'", tableName)).Scan(&loadedCount)
+
+		return &models.LoaderResult{
+			Success: true,
+			Loaded:  loadedCount,
+			Failed:  0,
+			BatchID: batchID,
+			Message: fmt.Sprintf("Loader script executed successfully. %d records currently marked as Loaded.", loadedCount),
+		}, nil
+	}
 
 	if domain == "sales_orders" {
 		return m.executeLoaderSo(ctx, db, batchID)

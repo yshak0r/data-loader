@@ -127,10 +127,20 @@ export const App: React.FC = () => {
   // Restore any previously uploaded custom scripts to backend manager on mount
   useEffect(() => {
     try {
-      const stored = JSON.parse(localStorage.getItem('custom_sql_scripts') || '{}');
-      for (const slot of Object.keys(stored)) {
-        if (stored[slot]) {
-          dbClient.setSqlScript(slot as any, stored[slot]);
+      const domains: LoaderDomain[] = ['inventory', 'sales_orders'];
+      for (const d of domains) {
+        const stored = JSON.parse(localStorage.getItem(`custom_sql_scripts_${d}`) || '{}');
+        for (const slot of Object.keys(stored)) {
+          if (stored[slot]) {
+            dbClient.setSqlScript(slot as any, stored[slot], d);
+          }
+        }
+      }
+      // Also check legacy custom_sql_scripts key for backward compatibility
+      const legacy = JSON.parse(localStorage.getItem('custom_sql_scripts') || '{}');
+      for (const slot of Object.keys(legacy)) {
+        if (legacy[slot]) {
+          dbClient.setSqlScript(slot as any, legacy[slot], 'inventory');
         }
       }
     } catch (_) {}
@@ -486,6 +496,7 @@ export const App: React.FC = () => {
 
           {currentTab === 'execution' && (
             <ExecutionView
+              domain={domain}
               counts={counts}
               fileName={fileName}
               companyCode={dbConfig.companyCode}
@@ -509,11 +520,13 @@ export const App: React.FC = () => {
           {currentTab === 'schema' && <SchemaMappingView />}
           {currentTab === 'scripts' && (
             <SqlScriptsView
+              domain={domain}
               dbConnected={dbConnected}
               dbHost={dbConfig.host}
               dbDatabase={dbConfig.database}
               onRefreshData={() => refreshGridData()}
               onOpenDbConfig={() => setIsDbConfigOpen(true)}
+              onDomainChange={(d) => setDomain(d)}
             />
           )}
           {currentTab === 'docs' && <DocumentationView />}

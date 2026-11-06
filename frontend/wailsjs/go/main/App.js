@@ -10,8 +10,8 @@ export function CleanInventoryTables() {
   return window['go']['main']['App']['CleanInventoryTables']();
 }
 
-export function ClearAllSqlScripts() {
-  return window['go']['main']['App']['ClearAllSqlScripts']();
+export function ClearAllSqlScripts(arg1) {
+  return window['go']['main']['App']['ClearAllSqlScripts'](arg1);
 }
 
 export function ClearStagedData(arg1) {
@@ -46,8 +46,8 @@ export function ExportData(arg1, arg2) {
   return window['go']['main']['App']['ExportData'](arg1, arg2);
 }
 
-export function GetAllSqlScripts() {
-  return window['go']['main']['App']['GetAllSqlScripts']();
+export function GetAllSqlScripts(arg1) {
+  return window['go']['main']['App']['GetAllSqlScripts'](arg1);
 }
 
 export function GetCleanPreview() {
@@ -90,16 +90,16 @@ export function RegenerateMachineFingerprint() {
   return window['go']['main']['App']['RegenerateMachineFingerprint']();
 }
 
-export function ResetSqlScript(arg1) {
-  return window['go']['main']['App']['ResetSqlScript'](arg1);
+export function ResetSqlScript(arg1, arg2) {
+  return window['go']['main']['App']['ResetSqlScript'](arg1, arg2);
 }
 
 export function SaveFileDialog(arg1, arg2) {
   return window['go']['main']['App']['SaveFileDialog'](arg1, arg2);
 }
 
-export function SetSqlScript(arg1, arg2, arg3, arg4) {
-  return window['go']['main']['App']['SetSqlScript'](arg1, arg2, arg3, arg4);
+export function SetSqlScript(arg1, arg2, arg3, arg4, arg5) {
+  return window['go']['main']['App']['SetSqlScript'](arg1, arg2, arg3, arg4, arg5);
 }
 
 export function TestDatabaseConnection(arg1) {

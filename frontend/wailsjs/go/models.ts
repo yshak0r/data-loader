@@ -473,6 +473,7 @@ export namespace scripts {
 	
 	export class ScriptSlotInfo {
 	    slot: string;
+	    domain: string;
 	    label: string;
 	    description: string;
 	    defaultFileName: string;
@@ -480,6 +481,7 @@ export namespace scripts {
 	    filePath?: string;
 	    content: string;
 	    isCustom: boolean;
+	    isLoaded: boolean;
 	    lastUpdated?: string;
 	
 	    static createFrom(source: any = {}) {
@@ -489,6 +491,7 @@ export namespace scripts {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.slot = source["slot"];
+	        this.domain = source["domain"];
 	        this.label = source["label"];
 	        this.description = source["description"];
 	        this.defaultFileName = source["defaultFileName"];
@@ -496,6 +499,7 @@ export namespace scripts {
 	        this.filePath = source["filePath"];
 	        this.content = source["content"];
 	        this.isCustom = source["isCustom"];
+	        this.isLoaded = source["isLoaded"];
 	        this.lastUpdated = source["lastUpdated"];
 	    }
 	}

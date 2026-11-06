@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"fmt"
+	"strings"
 )
 
 const dcLoadsTableDDL = `
@@ -88,20 +89,50 @@ END
 
 // EnsureTableExists ensures the appropriate staging table exists idempotently.
 func (m *Manager) EnsureTableExists(ctx context.Context, domain string) (bool, string) {
+	return m.EnsureTableExistsWithScript(ctx, domain, "")
+}
+
+// EnsureTableExistsWithScript executes custom DDL if provided, or default DDL.
+func (m *Manager) EnsureTableExistsWithScript(ctx context.Context, domain string, scriptContent string) (bool, string) {
 	db, _, err := m.GetDB()
 	if err != nil {
 		return false, err.Error()
 	}
 
-	ddl := dcLoadsTableDDL
 	tableName := "[FIN].[KAS_DC_LOADS]"
 	if domain == "sales_orders" {
-		ddl = soLoadsTableDDL
 		tableName = "[FIN].[KAS_SO_LOADS]"
 	}
 
-	if _, err := db.ExecContext(ctx, ddl); err != nil {
-		return false, fmt.Sprintf("Failed to initialize staging table %s: %v", tableName, err)
+	scriptToRun := scriptContent
+	if strings.TrimSpace(scriptToRun) == "" {
+		if domain == "sales_orders" {
+			scriptToRun = soLoadsTableDDL
+		} else {
+			scriptToRun = dcLoadsTableDDL
+		}
+	}
+
+	// Execute batches (splitting by GO if any)
+	batches := SplitSqlBatches(scriptToRun)
+	for _, b := range batches {
+		trimmed := strings.TrimSpace(b)
+		if trimmed == "" {
+			continue
+		}
+		if _, err := db.ExecContext(ctx, trimmed); err != nil {
+			// If custom script failed, try default DDL as safety fallback
+			if scriptContent != "" {
+				defaultDDL := dcLoadsTableDDL
+				if domain == "sales_orders" {
+					defaultDDL = soLoadsTableDDL
+				}
+				if _, defErr := db.ExecContext(ctx, defaultDDL); defErr == nil {
+					return true, fmt.Sprintf("Staging table %s initialized using default DDL (custom script had error: %v)", tableName, err)
+				}
+			}
+			return false, fmt.Sprintf("Failed to initialize staging table %s: %v", tableName, err)
+		}
 	}
 
 	return true, fmt.Sprintf("Staging table %s verified and ready.", tableName)

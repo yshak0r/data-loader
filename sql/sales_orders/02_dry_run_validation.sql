@@ -1,0 +1,11 @@
+-- ============================================================================
+-- Sales Order Loader - Dry Run Validation Script
+-- Domain: sales_orders
+-- Slot: dry_run
+-- Target: [FIN].[KAS_SO_LOADS]
+--
+-- [PLACEHOLDER] Paste your custom Dry Run validation script below.
+-- The script should validate records and update STATUS_FLAG ('V' or 'E')
+-- and RS_MESSAGE_TEXT in [FIN].[KAS_SO_LOADS].
+-- ============================================================================
+

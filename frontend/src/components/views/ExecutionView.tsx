@@ -23,10 +23,11 @@ import { Card, CardHeader, CardTitle, CardContent } from '../ui/card';
 import { Button } from '../ui/button';
 import { Badge } from '../ui/badge';
 import { Progress } from '../ui/progress';
-import { GridCounts, RuleBreakdownItem, SqlScriptSlot, SqlScriptInfo } from '../../types/dcloader';
+import { GridCounts, RuleBreakdownItem, SqlScriptSlot, SqlScriptInfo, LoaderDomain } from '../../types/dcloader';
 import { dbClient } from '../../lib/dbClient';
 
 interface ExecutionViewProps {
+  domain?: LoaderDomain;
   counts: GridCounts;
   fileName: string;
   companyCode: string;
@@ -48,6 +49,7 @@ interface LogEntry {
 }
 
 export const ExecutionView: React.FC<ExecutionViewProps> = ({
+  domain = 'inventory',
   counts,
   fileName,
   companyCode,
@@ -60,6 +62,7 @@ export const ExecutionView: React.FC<ExecutionViewProps> = ({
   onOpenCleanDialog,
   onOpenClearStagedDialog,
 }) => {
+  const tableName = domain === 'sales_orders' ? '[FIN].[KAS_SO_LOADS]' : '[FIN].[KAS_DC_LOADS]';
   const [isRunning, setIsRunning] = useState(false);
   const [progress, setProgress] = useState(0);
   const [activeStep, setActiveStep] = useState(0);
@@ -70,7 +73,7 @@ export const ExecutionView: React.FC<ExecutionViewProps> = ({
       timestamp: new Date().toLocaleTimeString(),
       level: dbConnected ? 'info' : 'warn',
       message: dbConnected
-        ? `Execution console connected to SQL Server at ${dbHost} [${dbDatabase}]. Staging table: [FIN].[KAS_DC_LOADS].`
+        ? `Execution console connected to SQL Server at ${dbHost} [${dbDatabase}]. Target table: ${tableName}.`
         : `SQL Server database is disconnected. Please connect before executing SQL scripts.`,
     },
   ]);
@@ -81,33 +84,38 @@ export const ExecutionView: React.FC<ExecutionViewProps> = ({
 
   const loadScripts = async () => {
     try {
-      const all = await dbClient.getAllSqlScripts();
+      const all = await dbClient.getAllSqlScripts(domain);
       setActiveScripts(all);
     } catch (_) {}
   };
 
   useEffect(() => {
     loadScripts();
-  }, []);
+  }, [domain]);
 
   const handleUploadScript = async (slot: SqlScriptSlot) => {
     try {
       const res = await dbClient.openSqlFile();
       if (!res.canceled && res.fileContent && res.fileName) {
-        const updated = await dbClient.setSqlScript(slot, {
-          name: res.fileName,
-          content: res.fileContent,
-          filePath: res.filePath,
-        });
+        const updated = await dbClient.setSqlScript(
+          slot,
+          {
+            name: res.fileName,
+            content: res.fileContent,
+            filePath: res.filePath,
+          },
+          domain
+        );
 
         try {
-          const stored = JSON.parse(localStorage.getItem('custom_sql_scripts') || '{}');
+          const storageKey = `custom_sql_scripts_${domain}`;
+          const stored = JSON.parse(localStorage.getItem(storageKey) || '{}');
           stored[slot] = {
             name: res.fileName,
             content: res.fileContent,
             filePath: res.filePath,
           };
-          localStorage.setItem('custom_sql_scripts', JSON.stringify(stored));
+          localStorage.setItem(storageKey, JSON.stringify(stored));
         } catch (_) {}
 
         setActiveScripts((prev) => (prev ? { ...prev, [slot]: updated } : null));
@@ -164,23 +172,23 @@ export const ExecutionView: React.FC<ExecutionViewProps> = ({
 
     if (executionMode === 'dryrun') {
       const currentScript = activeScripts?.dry_run;
-      const isLoaded = Boolean(currentScript && currentScript.isLoaded && currentScript.content && currentScript.content.trim().length > 0);
+      const isLoaded = Boolean(currentScript && currentScript.content && currentScript.content.trim().length > 0);
       if (!isLoaded) {
-        addLog('error', 'No Dry Run Validation script loaded. Please load or upload a script first in SQL Scripts Config.');
+        addLog('error', 'No Dry Run Validation script loaded. Please configure a script in SQL Scripts Config.');
         setIsRunning(false);
         return;
       }
-      const scriptLabel = `[${currentScript!.currentFileName}] (${currentScript!.isCustom ? 'Custom Uploaded' : 'Default Script'})`;
+      const scriptLabel = `[${currentScript!.currentFileName || currentScript!.defaultFileName}] (${currentScript!.isCustom ? 'Custom Uploaded' : 'Default Script'})`;
 
       addLog('info', `=== Launching SQL Dry Run Validation Batch ===`);
-      addLog('info', `Server: ${dbHost} | Database: ${dbDatabase} | Staging Table: [FIN].[KAS_DC_LOADS]`);
+      addLog('info', `Server: ${dbHost} | Database: ${dbDatabase} | Staging Table: ${tableName}`);
       addLog('info', `Executing SQL Script: ${scriptLabel}`);
 
       setProgress(35);
       setActiveStep(2);
 
       try {
-        const res = await dbClient.executeDryRun();
+        const res = await dbClient.executeDryRun(domain);
         setProgress(70);
         setActiveStep(3);
 
@@ -207,7 +215,7 @@ export const ExecutionView: React.FC<ExecutionViewProps> = ({
           setProgress(100);
           setActiveStep(5);
           setIsCompleted(true);
-          addLog('success', `Grid state refreshed directly from SQL Server [FIN].[KAS_DC_LOADS].`);
+          addLog('success', `Grid state refreshed directly from SQL Server ${tableName}.`);
         } else {
           addLog('error', `Execution failed: ${res.message}`);
           setProgress(100);
@@ -221,23 +229,23 @@ export const ExecutionView: React.FC<ExecutionViewProps> = ({
     } else {
       // Live Loader Script
       const currentScript = activeScripts?.loader;
-      const isLoaded = Boolean(currentScript && currentScript.isLoaded && currentScript.content && currentScript.content.trim().length > 0);
+      const isLoaded = Boolean(currentScript && currentScript.content && currentScript.content.trim().length > 0);
       if (!isLoaded) {
-        addLog('error', 'No Loader script loaded. Please load or upload a script first in SQL Scripts Config.');
+        addLog('error', 'No Loader script loaded. Please configure a script in SQL Scripts Config.');
         setIsRunning(false);
         return;
       }
-      const scriptLabel = `[${currentScript!.currentFileName}] (${currentScript!.isCustom ? 'Custom Uploaded' : 'Default Script'})`;
+      const scriptLabel = `[${currentScript!.currentFileName || currentScript!.defaultFileName}] (${currentScript!.isCustom ? 'Custom Uploaded' : 'Default Script'})`;
 
       addLog('info', `=== Launching Live Loader SQL Batch Execution ===`);
-      addLog('info', `Target: ${dbHost} / [${dbDatabase}].[FIN].[KAS_DC_LOADS]`);
+      addLog('info', `Target: ${dbHost} / [${dbDatabase}].${tableName}`);
       addLog('info', `Executing SQL Script: ${scriptLabel} on records with STATUS_FLAG = 'V'...`);
 
       setProgress(35);
       setActiveStep(2);
 
       try {
-        const res = await dbClient.executeLoader();
+        const res = await dbClient.executeLoader(domain);
         setProgress(70);
         setActiveStep(3);
 
@@ -256,7 +264,7 @@ export const ExecutionView: React.FC<ExecutionViewProps> = ({
           setProgress(100);
           setActiveStep(5);
           setIsCompleted(true);
-          addLog('info', `Reloaded updated records from SQL Server [FIN].[KAS_DC_LOADS].`);
+          addLog('info', `Reloaded updated records from SQL Server ${tableName}.`);
         } else {
           addLog('error', `Loader script error: ${res.message}`);
           setProgress(100);
@@ -383,13 +391,13 @@ export const ExecutionView: React.FC<ExecutionViewProps> = ({
                 {executionMode === 'dryrun' ? 'Validation Script' : 'Loader Script'}
               </span>
               <span className={`text-[11px] font-mono font-medium truncate max-w-[140px] ${
-                (executionMode === 'dryrun' ? activeScripts?.dry_run?.isLoaded : activeScripts?.loader?.isLoaded)
+                (executionMode === 'dryrun' ? activeScripts?.dry_run?.content : activeScripts?.loader?.content)
                   ? 'text-foreground'
                   : 'text-muted-foreground italic'
               }`}>
                 {executionMode === 'dryrun'
-                  ? (activeScripts?.dry_run?.isLoaded ? activeScripts.dry_run.currentFileName : 'None (Not loaded)')
-                  : (activeScripts?.loader?.isLoaded ? activeScripts.loader.currentFileName : 'None (Not loaded)')}
+                  ? (activeScripts?.dry_run?.currentFileName || activeScripts?.dry_run?.defaultFileName || 'Default Validation')
+                  : (activeScripts?.loader?.currentFileName || activeScripts?.loader?.defaultFileName || 'Default Loader')}
               </span>
             </div>
             <Button
@@ -412,12 +420,12 @@ export const ExecutionView: React.FC<ExecutionViewProps> = ({
               (!dbConnected
                 ? false
                 : counts.total === 0 ||
-                  !(executionMode === 'dryrun' ? activeScripts?.dry_run?.isLoaded : activeScripts?.loader?.isLoaded))
+                  !(executionMode === 'dryrun' ? activeScripts?.dry_run?.content : activeScripts?.loader?.content))
             }
             className="text-xs font-medium h-8 shadow-sm"
             title={
-              !(executionMode === 'dryrun' ? activeScripts?.dry_run?.isLoaded : activeScripts?.loader?.isLoaded)
-                ? 'Please load or upload a script in SQL Scripts Config first'
+              !(executionMode === 'dryrun' ? activeScripts?.dry_run?.content : activeScripts?.loader?.content)
+                ? 'Please configure a script in SQL Scripts Config first'
                 : ''
             }
           >

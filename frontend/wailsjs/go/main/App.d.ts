@@ -7,7 +7,7 @@ export function ActivateLicense(arg1:string):Promise<models.ActivateResult>;
 
 export function CleanInventoryTables():Promise<models.CleanTableResult>;
 
-export function ClearAllSqlScripts():Promise<Record<scripts.ScriptSlot, scripts.ScriptSlotInfo>>;
+export function ClearAllSqlScripts(arg1:string):Promise<Record<scripts.ScriptSlot, scripts.ScriptSlotInfo>>;
 
 export function ClearStagedData(arg1:string):Promise<models.ClearResult>;
 
@@ -25,7 +25,7 @@ export function ExecuteLoader(arg1:string):Promise<models.LoaderResult>;
 
 export function ExportData(arg1:string,arg2:string):Promise<string>;
 
-export function GetAllSqlScripts():Promise<Record<scripts.ScriptSlot, scripts.ScriptSlotInfo>>;
+export function GetAllSqlScripts(arg1:string):Promise<Record<scripts.ScriptSlot, scripts.ScriptSlotInfo>>;
 
 export function GetCleanPreview():Promise<models.CleanPreview>;
 
@@ -47,11 +47,11 @@ export function ReadFile(arg1:string):Promise<string>;
 
 export function RegenerateMachineFingerprint():Promise<string>;
 
-export function ResetSqlScript(arg1:scripts.ScriptSlot):Promise<scripts.ScriptSlotInfo>;
+export function ResetSqlScript(arg1:string,arg2:scripts.ScriptSlot):Promise<scripts.ScriptSlotInfo>;
 
 export function SaveFileDialog(arg1:string,arg2:string):Promise<models.SaveFileResult>;
 
-export function SetSqlScript(arg1:scripts.ScriptSlot,arg2:string,arg3:string,arg4:string):Promise<scripts.ScriptSlotInfo>;
+export function SetSqlScript(arg1:string,arg2:scripts.ScriptSlot,arg3:string,arg4:string,arg5:string):Promise<scripts.ScriptSlotInfo>;
 
 export function TestDatabaseConnection(arg1:models.DatabaseConfig):Promise<models.ConnectionResult>;
 

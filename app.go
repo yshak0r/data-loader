@@ -76,7 +76,8 @@ func (a *App) DisconnectDatabase() bool {
 }
 
 func (a *App) EnsureTableExists(domain string) models.TableResult {
-	ok, msg := a.dbManager.EnsureTableExists(a.ctx, domain)
+	script := a.scriptsMgr.GetScriptContent(domain, scripts.SlotCreateTable)
+	ok, msg := a.dbManager.EnsureTableExistsWithScript(a.ctx, domain, script)
 	return models.TableResult{
 		Success: ok,
 		Message: msg,
@@ -104,7 +105,8 @@ func (a *App) UploadCsv(filePath string, companyCode string, division string, do
 	}
 
 	// Automatically ensure the target staging table and schema exist before streaming
-	if ok, errMsg := a.dbManager.EnsureTableExists(a.ctx, domain); !ok {
+	tableScript := a.scriptsMgr.GetScriptContent(domain, scripts.SlotCreateTable)
+	if ok, errMsg := a.dbManager.EnsureTableExistsWithScript(a.ctx, domain, tableScript); !ok {
 		return models.UploadResult{
 			Success: false,
 			Message: fmt.Sprintf("Failed to prepare staging table: %s", errMsg),
@@ -133,11 +135,13 @@ func (a *App) UploadCsv(filePath string, companyCode string, division string, do
 }
 
 func (a *App) ExecuteDryRun(domain string) (*models.DryRunResult, error) {
-	return a.dbManager.ExecuteDryRun(a.ctx, domain)
+	script := a.scriptsMgr.GetScriptContent(domain, scripts.SlotDryRun)
+	return a.dbManager.ExecuteDryRun(a.ctx, domain, script)
 }
 
 func (a *App) ExecuteLoader(domain string) (*models.LoaderResult, error) {
-	return a.dbManager.ExecuteLoader(a.ctx, domain)
+	script := a.scriptsMgr.GetScriptContent(domain, scripts.SlotLoader)
+	return a.dbManager.ExecuteLoader(a.ctx, domain, script)
 }
 
 func (a *App) QueryGrid(params models.GridQueryParams) (*models.GridQueryResult, error) {
@@ -149,7 +153,7 @@ func (a *App) ExportData(filter string, domain string) (string, error) {
 }
 
 func (a *App) CleanInventoryTables() (*models.CleanTableResult, error) {
-	script := a.scriptsMgr.GetScriptContent(scripts.SlotCleanTables)
+	script := a.scriptsMgr.GetScriptContent("inventory", scripts.SlotCleanTables)
 	return a.dbManager.CleanInventoryTablesWithScript(a.ctx, script)
 }
 
@@ -251,18 +255,18 @@ func (a *App) ActivateLicense(licenseJSON string) models.ActivateResult {
 }
 
 // SQL Script Customization Slots
-func (a *App) GetAllSqlScripts() map[scripts.ScriptSlot]scripts.ScriptSlotInfo {
-	return a.scriptsMgr.GetAllScriptsConfig()
+func (a *App) GetAllSqlScripts(domain string) map[scripts.ScriptSlot]scripts.ScriptSlotInfo {
+	return a.scriptsMgr.GetAllScriptsConfig(domain)
 }
 
-func (a *App) SetSqlScript(slot scripts.ScriptSlot, name string, filePath string, content string) scripts.ScriptSlotInfo {
-	return a.scriptsMgr.SetCustomScript(slot, name, filePath, content)
+func (a *App) SetSqlScript(domain string, slot scripts.ScriptSlot, name string, filePath string, content string) scripts.ScriptSlotInfo {
+	return a.scriptsMgr.SetCustomScript(domain, slot, name, filePath, content)
 }
 
-func (a *App) ResetSqlScript(slot scripts.ScriptSlot) scripts.ScriptSlotInfo {
-	return a.scriptsMgr.ResetScript(slot)
+func (a *App) ResetSqlScript(domain string, slot scripts.ScriptSlot) scripts.ScriptSlotInfo {
+	return a.scriptsMgr.ResetScript(domain, slot)
 }
 
-func (a *App) ClearAllSqlScripts() map[scripts.ScriptSlot]scripts.ScriptSlotInfo {
-	return a.scriptsMgr.ClearAllScripts()
+func (a *App) ClearAllSqlScripts(domain string) map[scripts.ScriptSlot]scripts.ScriptSlotInfo {
+	return a.scriptsMgr.ClearAllScripts(domain)
 }
