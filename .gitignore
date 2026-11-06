@@ -1,0 +1,23 @@
+# Wails binary build output
+build/bin/
+*.exe
+
+# Frontend dependencies and build output
+frontend/node_modules/
+frontend/dist/
+
+# Security - Private keys and license files
+*.lic
+*.pem
+*.key
+*_private_key*
+
+# OS and editor files
+.DS_Store
+Thumbs.db
+*.log
+*.tmp
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.idea/
