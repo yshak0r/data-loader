@@ -213,27 +213,39 @@ func (m *Manager) EnsureTableExistsWithScript(ctx context.Context, domain string
 
 	// Execute batches (splitting by GO if any)
 	batches := SplitSqlBatches(scriptToRun)
-	for _, b := range batches {
+	for i, b := range batches {
 		trimmed := strings.TrimSpace(b)
 		if trimmed == "" {
 			continue
 		}
 		if _, err := db.ExecContext(ctx, trimmed); err != nil {
 			// If custom script failed, try default DDL as safety fallback
-			if scriptContent != "" {
+			if strings.TrimSpace(scriptContent) != "" {
 				defaultDDL := dcLoadsTableDDL
 				if domain == "sales_orders" {
 					defaultDDL = soLoadsTableDDL
 				}
-				if _, defErr := db.ExecContext(ctx, defaultDDL); defErr == nil {
-					return true, fmt.Sprintf("Staging table %s initialized using default DDL (custom script had error: %v)", tableName, err)
+				defaultBatches := SplitSqlBatches(defaultDDL)
+				allDefOk := true
+				for _, dbatch := range defaultBatches {
+					dtrim := strings.TrimSpace(dbatch)
+					if dtrim == "" {
+						continue
+					}
+					if _, defErr := db.ExecContext(ctx, dtrim); defErr != nil {
+						allDefOk = false
+						break
+					}
+				}
+				if allDefOk {
+					return true, fmt.Sprintf("Staging table %s initialized using default DDL (custom script had error in batch %d: %v)", tableName, i+1, err)
 				}
 			}
-			return false, fmt.Sprintf("Failed to initialize staging table %s: %v", tableName, err)
+			return false, fmt.Sprintf("Failed to initialize %s (batch %d): %v", tableName, i+1, err)
 		}
 	}
 
-	return true, fmt.Sprintf("Staging table %s verified and ready.", tableName)
+	return true, fmt.Sprintf("Staging table %s and dependencies verified and ready.", tableName)
 }
 
 // ClearStagedData truncates the active staging table and reports count deleted.

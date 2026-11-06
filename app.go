@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"dc-loader-wails/backend/csv"
 	"dc-loader-wails/backend/database"
@@ -95,6 +96,14 @@ func (a *App) ClearStagedData(domain string) models.ClearResult {
 
 // CSV Ingestion & Execution Engine
 func (a *App) UploadCsv(filePath string, companyCode string, division string, domain string) models.UploadResult {
+	// Defensive swap if caller inverted division and domain
+	if (division == "inventory" || division == "sales_orders" || division == "so") && (domain != "inventory" && domain != "sales_orders" && domain != "so") {
+		division, domain = domain, division
+	}
+	if division == "" {
+		division = "1"
+	}
+
 	db, _, err := a.dbManager.GetDB()
 	if err != nil {
 		return models.UploadResult{
@@ -163,6 +172,17 @@ func (a *App) GetCleanPreview() (*models.CleanPreview, error) {
 
 // Native File Dialogs
 func (a *App) OpenFileDialog(title string, filterName string, extensions string) models.FileDialogResult {
+	// Defensive swap if caller inverted filterName and extensions (e.g. pattern passed as filterName)
+	if strings.Contains(filterName, "*") && !strings.Contains(extensions, "*") {
+		filterName, extensions = extensions, filterName
+	}
+	if extensions == "" {
+		extensions = "*.*"
+	}
+	if filterName == "" {
+		filterName = "Files (" + extensions + ")"
+	}
+
 	path, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
 		Title: title,
 		Filters: []runtime.FileFilter{

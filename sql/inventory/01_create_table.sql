@@ -57,8 +57,28 @@ BEGIN
     IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[FIN].[KAS_DC_LOADS]') AND name = 'IC_RETEST_DATE')
         ALTER TABLE [FIN].[KAS_DC_LOADS] ADD [IC_RETEST_DATE] [datetime] NOT NULL CONSTRAINT [DF_KAS_DC_LOADS_IC_RETEST_DATE] DEFAULT ('17-NOV-1858');
 
-    -- Ensure RS_MESSAGE_TEXT is varchar(2000)
-    ALTER TABLE [FIN].[KAS_DC_LOADS] ALTER COLUMN [RS_MESSAGE_TEXT] [varchar](2000) NOT NULL;
+    -- Ensure RS_MESSAGE_TEXT is varchar(2000) safely without constraint conflicts
+    IF EXISTS (
+        SELECT * FROM sys.columns 
+        WHERE object_id = OBJECT_ID(N'[FIN].[KAS_DC_LOADS]') 
+          AND name = 'RS_MESSAGE_TEXT' 
+          AND (max_length < 2000 AND max_length > 0)
+    )
+    BEGIN
+        DECLARE @defConstraintName nvarchar(256);
+        SELECT @defConstraintName = dc.name
+        FROM sys.default_constraints dc
+        JOIN sys.columns c ON dc.parent_object_id = c.object_id AND dc.parent_column_id = c.column_id
+        WHERE dc.parent_object_id = OBJECT_ID(N'[FIN].[KAS_DC_LOADS]') AND c.name = 'RS_MESSAGE_TEXT';
+
+        IF @defConstraintName IS NOT NULL
+        BEGIN
+            EXEC('ALTER TABLE [FIN].[KAS_DC_LOADS] DROP CONSTRAINT [' + @defConstraintName + ']');
+        END
+
+        ALTER TABLE [FIN].[KAS_DC_LOADS] ALTER COLUMN [RS_MESSAGE_TEXT] [varchar](2000) NOT NULL;
+        ALTER TABLE [FIN].[KAS_DC_LOADS] ADD CONSTRAINT [DF_KAS_DC_LOADS_RS_MESSAGE_TEXT] DEFAULT (' ') FOR [RS_MESSAGE_TEXT];
+    END
 END
 GO
 

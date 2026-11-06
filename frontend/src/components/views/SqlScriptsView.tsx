@@ -531,11 +531,12 @@ export const SqlScriptsView: React.FC<SqlScriptsViewProps> = ({
                     <Button
                       size="sm"
                       onClick={handleExecuteCreateTable}
-                      disabled={isExecuting || !dbConnected}
+                      disabled={isExecuting}
                       className="text-xs font-medium h-7 px-2.5"
+                      title={!dbConnected ? 'Connect database to execute table script' : 'Execute table creation DDL script'}
                     >
                       <Play className={`w-3 h-3 mr-1 ${isExecuting ? 'animate-spin' : ''}`} />
-                      {isExecuting ? 'Running...' : 'Execute DDL'}
+                      {isExecuting ? 'Executing...' : !dbConnected ? 'Connect DB' : 'Execute Script'}
                     </Button>
                   )}
                 </div>
@@ -612,11 +613,26 @@ export const SqlScriptsView: React.FC<SqlScriptsViewProps> = ({
               </Button>
               <Button
                 size="sm"
+                variant="outline"
                 onClick={handleSaveEditorContent}
                 className="text-xs font-medium"
               >
                 Save as Active Script
               </Button>
+              {activeViewingSlot === 'create_table' && (
+                <Button
+                  size="sm"
+                  onClick={async () => {
+                    await handleSaveEditorContent();
+                    await handleExecuteCreateTable();
+                  }}
+                  disabled={executingSlot === 'create_table'}
+                  className="text-xs font-medium"
+                >
+                  <Play className={`w-3 h-3 mr-1 ${executingSlot === 'create_table' ? 'animate-spin' : ''}`} />
+                  Save & Execute
+                </Button>
+              )}
             </div>
           </DialogFooter>
         </DialogContent>

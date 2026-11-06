@@ -226,9 +226,7 @@ func (m *Manager) SetCustomScript(domain string, slot ScriptSlot, name string, f
 	dom := normalizeDomain(domain)
 	key := makeKey(dom, slot)
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
+	// Fetch base template config WITHOUT holding the write lock to prevent recursive deadlock
 	cfg := m.GetAllScriptsConfig(dom)
 	info := cfg[slot]
 	info.Domain = dom
@@ -239,7 +237,10 @@ func (m *Manager) SetCustomScript(domain string, slot ScriptSlot, name string, f
 	info.IsLoaded = true
 	info.LastUpdated = time.Now().Format(time.RFC3339)
 
+	m.mu.Lock()
 	m.custom[key] = info
+	m.mu.Unlock()
+
 	return info
 }
 

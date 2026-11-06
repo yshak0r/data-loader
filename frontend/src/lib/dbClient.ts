@@ -169,7 +169,7 @@ class DbClient {
     domain?: LoaderDomain;
   }> {
     try {
-      const res = await App.UploadCsv(filePath, companyCode, domain || '', division || '1');
+      const res = await App.UploadCsv(filePath, companyCode, division || '1', domain || 'inventory');
       return {
         success: res.success,
         totalRows: res.totalRows,
@@ -300,7 +300,7 @@ class DbClient {
 
   public async openFileDialog(title: string, filterPattern: string, filterName: string): Promise<{ canceled: boolean; filePath?: string; fileName?: string }> {
     try {
-      const res = await App.OpenFileDialog(title, filterPattern, filterName);
+      const res = await App.OpenFileDialog(title, filterName, filterPattern);
       return {
         canceled: res.canceled,
         filePath: res.filePath,
@@ -329,7 +329,7 @@ class DbClient {
   }
 
   public async openSqlFile(): Promise<{ canceled: boolean; filePath?: string; fileContent?: string; fileName?: string }> {
-    const dialog = await App.OpenFileDialog('Select SQL Script File', '*.sql', 'SQL Scripts (*.sql)');
+    const dialog = await App.OpenFileDialog('Select SQL Script File', 'SQL Scripts (*.sql)', '*.sql');
     if (dialog.canceled || !dialog.filePath) {
       return { canceled: true };
     }
@@ -344,7 +344,7 @@ class DbClient {
 
   public async openXmlFile(): Promise<{ canceled: boolean; filePath?: string; fileContent?: string; fileName?: string; error?: string }> {
     try {
-      const dialog = await App.OpenFileDialog('Select Ross Configuration XML', '*.xml;*.config;*.txt', 'Configuration Files (*.xml;*.config;*.txt)');
+      const dialog = await App.OpenFileDialog('Select Ross Configuration XML', 'Configuration Files (*.xml;*.config;*.txt)', '*.xml;*.config;*.txt');
       if (dialog.canceled || !dialog.filePath) {
         return { canceled: true };
       }
