@@ -23,7 +23,6 @@ export type NavTab =
   | 'importer'
   | 'errors'
   | 'lpns'
-  | 'schema'
   | 'execution'
   | 'scripts'
   | 'docs';
@@ -88,11 +87,6 @@ export const NavigationSidebar: React.FC<NavigationSidebarProps> = ({
       id: 'execution',
       label: 'Simulate & Load',
       icon: PlayCircle,
-    },
-    {
-      id: 'schema',
-      label: 'Schema Mapping',
-      icon: Layers,
     },
     {
       id: 'scripts',

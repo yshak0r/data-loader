@@ -5,7 +5,6 @@ import { DashboardView } from '@/components/views/DashboardView';
 import { ImportAndGridView } from '@/components/views/ImportAndGridView';
 import { LpnHierarchyView } from '@/components/views/LpnHierarchyView';
 import { OrderGroupingView } from '@/components/views/OrderGroupingView';
-import { SchemaMappingView } from '@/components/views/SchemaMappingView';
 import { ExecutionView } from '@/components/views/ExecutionView';
 import { DocumentationView } from '@/components/views/DocumentationView';
 import { SqlScriptsView } from '@/components/views/SqlScriptsView';
@@ -524,7 +523,6 @@ export const App: React.FC = () => {
             />
           )}
 
-          {currentTab === 'schema' && <SchemaMappingView />}
           {currentTab === 'scripts' && (
             <SqlScriptsView
               domain={domain}
