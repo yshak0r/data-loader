@@ -156,7 +156,7 @@ export interface OrderGroup {
   errorCount: number;
   lines: OrderLineItem[];
   orderNumber?: string;
-  status: 'valid' | 'error' | 'loaded' | 'pending';
+  status: 'valid' | 'error' | 'loaded' | 'failed' | 'pending';
 }
 
 // ---------------------------------------------------------------------------

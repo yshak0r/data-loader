@@ -45,6 +45,10 @@ func (m *Manager) QueryGrid(ctx context.Context, params models.GridQueryParams) 
 	if status != "" && status != "ALL" {
 		if strings.EqualFold(status, "L") || strings.EqualFold(status, "P") || strings.EqualFold(status, "LOADED") {
 			conditions = append(conditions, "STATUS_FLAG IN ('L', 'P')")
+		} else if strings.EqualFold(status, "F") || strings.EqualFold(status, "FAILED") {
+			conditions = append(conditions, "STATUS_FLAG = 'F'")
+		} else if strings.EqualFold(status, "V") || strings.EqualFold(status, "VALID") {
+			conditions = append(conditions, "STATUS_FLAG IN ('V', 'F', 'L', 'P')")
 		} else {
 			conditions = append(conditions, fmt.Sprintf("STATUS_FLAG = @p%d", argIdx))
 			args = append(args, status)
@@ -90,18 +94,19 @@ func (m *Manager) QueryGrid(ctx context.Context, params models.GridQueryParams) 
 	}
 
 	// 2. Compute status counts breakdown across the whole table
+	// valid = all records that have passed validation (V awaiting load, F load failed, P/L committed)
 	countsQuery := fmt.Sprintf(`
 		SELECT 
 			COUNT(*) AS total,
-			ISNULL(SUM(CASE WHEN STATUS_FLAG = 'V' THEN 1 ELSE 0 END), 0) AS valid,
+			ISNULL(SUM(CASE WHEN STATUS_FLAG IN ('V', 'F', 'P', 'L') THEN 1 ELSE 0 END), 0) AS valid,
 			ISNULL(SUM(CASE WHEN STATUS_FLAG = 'E' THEN 1 ELSE 0 END), 0) AS error,
-			ISNULL(SUM(CASE WHEN STATUS_FLAG IN ('L', 'P') THEN 1 ELSE 0 END), 0) AS loaded
+			ISNULL(SUM(CASE WHEN STATUS_FLAG IN ('L', 'P') THEN 1 ELSE 0 END), 0) AS loaded,
+			ISNULL(SUM(CASE WHEN STATUS_FLAG = 'F' THEN 1 ELSE 0 END), 0) AS failed
 		FROM %s
 	`, tableName)
 
 	var counts models.GridCounts
-	_ = db.QueryRowContext(ctx, countsQuery).Scan(&counts.Total, &counts.Valid, &counts.Error, &counts.Loaded)
-	counts.Failed = counts.Error
+	_ = db.QueryRowContext(ctx, countsQuery).Scan(&counts.Total, &counts.Valid, &counts.Error, &counts.Loaded, &counts.Failed)
 
 	// If no rows match, return early with empty slice
 	if totalFiltered == 0 {

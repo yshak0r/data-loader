@@ -25,9 +25,11 @@ func (m *Manager) ExportData(ctx context.Context, filter string, domain string) 
 	f := strings.ToLower(strings.TrimSpace(filter))
 	switch f {
 	case "valid", "v":
-		statusWhere = "WHERE STATUS_FLAG = 'V'"
+		statusWhere = "WHERE STATUS_FLAG IN ('V', 'F', 'L', 'P')"
 	case "error", "e":
 		statusWhere = "WHERE STATUS_FLAG = 'E'"
+	case "failed", "f":
+		statusWhere = "WHERE STATUS_FLAG = 'F'"
 	case "loaded", "p", "l", "processed":
 		statusWhere = "WHERE STATUS_FLAG IN ('L', 'P')"
 	default:

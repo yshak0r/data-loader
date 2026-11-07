@@ -158,7 +158,7 @@ SET NOCOUNT ON;
 -- Reset pending and previous error records to valid ('V') before validation
 UPDATE [FIN].[KAS_DC_LOADS]
 SET STATUS_FLAG = 'V', RS_MESSAGE_TEXT = ''
-WHERE STATUS_FLAG IN (' ', 'E');
+WHERE STATUS_FLAG IN (' ', 'E', 'F');
 
 -- Rule 1: Missing Warehouse
 UPDATE [FIN].[KAS_DC_LOADS]
@@ -325,7 +325,7 @@ SET NOCOUNT ON;
 -- 1. Reset pending and previous error records to valid ('V') before validation
 UPDATE [FIN].[KAS_SO_LOADS]
 SET STATUS_FLAG = 'V', RS_MESSAGE_TEXT = ''
-WHERE STATUS_FLAG IN (' ', 'E');
+WHERE STATUS_FLAG IN (' ', 'E', 'F');
 
 -- 2. Validate Customer Number
 UPDATE [FIN].[KAS_SO_LOADS]

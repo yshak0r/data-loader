@@ -17,7 +17,7 @@ type KasDcLoadRecord struct {
 	Qty1                    float64  `json:"QTY_1"`
 	Uom2                    *string  `json:"UOM_2"`
 	Qty2                    float64  `json:"QTY_2"`
-	StatusFlag              string   `json:"STATUS_FLAG"` // ' ' (pending), 'V' (valid), 'E' (error), 'P' / 'L' (loaded/processed)
+	StatusFlag              string   `json:"STATUS_FLAG"` // ' ' (pending), 'V' (valid), 'E' (error), 'P' / 'L' (loaded/processed), 'F' (load failed)
 	RsMessageText           string   `json:"RS_MESSAGE_TEXT"`
 	DcLicensePlateLine      int      `json:"DC_LICENSE_PLATE_LINE"`
 	UnitCost                *float64 `json:"UNIT_COST"`

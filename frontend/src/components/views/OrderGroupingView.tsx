@@ -46,7 +46,7 @@ export const OrderGroupingView: React.FC<OrderGroupingViewProps> = ({
   onRefresh,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
-  const [statusFilter, setStatusFilter] = useState<'ALL' | 'V' | 'E' | 'L' | 'PENDING'>('ALL');
+  const [statusFilter, setStatusFilter] = useState<'ALL' | 'V' | 'E' | 'L' | 'F' | 'PENDING'>('ALL');
   const [expandedOrders, setExpandedOrders] = useState<Record<string, boolean>>({});
 
   // Group raw rows by Order Header Key
@@ -113,11 +113,13 @@ export const OrderGroupingView: React.FC<OrderGroupingViewProps> = ({
     // Derive overall status per group
     return Array.from(groupMap.values()).map((grp) => {
       const allLoaded = grp.lines.every((l) => l.status === 'L' || l.status === 'P');
-      const allValid = grp.lines.every((l) => l.status === 'V');
+      const anyFailed = grp.lines.some((l) => l.status === 'F');
       const anyError = grp.lines.some((l) => l.status === 'E');
+      const allValid = grp.lines.every((l) => l.status === 'V' || l.status === 'F' || l.status === 'L' || l.status === 'P');
 
-      let status: 'valid' | 'error' | 'loaded' | 'pending' = 'pending';
+      let status: 'valid' | 'error' | 'loaded' | 'failed' | 'pending' = 'pending';
       if (allLoaded) status = 'loaded';
+      else if (anyFailed) status = 'failed';
       else if (anyError) status = 'error';
       else if (allValid) status = 'valid';
 
@@ -151,8 +153,9 @@ export const OrderGroupingView: React.FC<OrderGroupingViewProps> = ({
   const filteredGroups = useMemo(() => {
     return orderGroups.filter((g) => {
       if (statusFilter !== 'ALL') {
-        if (statusFilter === 'V' && g.status !== 'valid') return false;
+        if (statusFilter === 'V' && g.status !== 'valid' && g.status !== 'loaded' && g.status !== 'failed') return false;
         if (statusFilter === 'E' && g.status !== 'error') return false;
+        if (statusFilter === 'F' && g.status !== 'failed') return false;
         if (statusFilter === 'L' && g.status !== 'loaded') return false;
         if (statusFilter === 'PENDING' && g.status !== 'pending') return false;
       }
@@ -170,13 +173,14 @@ export const OrderGroupingView: React.FC<OrderGroupingViewProps> = ({
 
   // Aggregate stats
   const totalOrdersCount = orderGroups.length;
-  const validOrdersCount = orderGroups.filter((g) => g.status === 'valid').length;
+  const validOrdersCount = orderGroups.filter((g) => g.status === 'valid' || g.status === 'loaded' || g.status === 'failed').length;
   const errorOrdersCount = orderGroups.filter((g) => g.status === 'error').length;
   const loadedOrdersCount = orderGroups.filter((g) => g.status === 'loaded').length;
+  const failedOrdersCount = orderGroups.filter((g) => g.status === 'failed').length;
   const totalUnits = orderGroups.reduce((acc, g) => acc + g.totalQuantity, 0);
   const totalOrderValue = orderGroups.reduce((acc, g) => acc + g.totalValue, 0);
 
-  const renderStatusBadge = (status: 'valid' | 'error' | 'loaded' | 'pending', errorCount: number) => {
+  const renderStatusBadge = (status: 'valid' | 'error' | 'loaded' | 'failed' | 'pending', errorCount: number) => {
     switch (status) {
       case 'valid':
         return (
@@ -190,6 +194,13 @@ export const OrderGroupingView: React.FC<OrderGroupingViewProps> = ({
           <Badge variant="destructive" className="gap-1 text-[10px]">
             <AlertTriangle className="w-3 h-3" />
             {errorCount} {errorCount === 1 ? 'ERROR' : 'ERRORS'}
+          </Badge>
+        );
+      case 'failed':
+        return (
+          <Badge className="bg-amber-500/15 text-amber-700 dark:text-amber-400 border border-amber-500/30 gap-1 text-[10px]">
+            <AlertTriangle className="w-3 h-3" />
+            LOAD FAILED
           </Badge>
         );
       case 'loaded':
@@ -223,6 +234,13 @@ export const OrderGroupingView: React.FC<OrderGroupingViewProps> = ({
           <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-rose-700 dark:text-rose-400 bg-rose-500/10 px-1.5 py-0.5 rounded border border-rose-500/30">
             <AlertTriangle className="w-3 h-3" />
             Error
+          </span>
+        );
+      case 'F':
+        return (
+          <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-amber-700 dark:text-amber-400 bg-amber-500/10 px-1.5 py-0.5 rounded border border-amber-500/30" title="Load Failed — uncommitted in Ross ERP">
+            <AlertTriangle className="w-3 h-3" />
+            Load Failed
           </span>
         );
       case 'L':
@@ -375,6 +393,17 @@ export const OrderGroupingView: React.FC<OrderGroupingViewProps> = ({
           >
             Loaded ({loadedOrdersCount})
           </button>
+          <button
+            onClick={() => setStatusFilter('F')}
+            className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
+              statusFilter === 'F'
+                ? 'bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-500/30'
+                : 'text-muted-foreground hover:text-amber-600'
+            }`}
+            title="Load Failed sales orders"
+          >
+            Failed ({failedOrdersCount})
+          </button>
         </div>
       </div>
 
@@ -506,6 +535,7 @@ export const OrderGroupingView: React.FC<OrderGroupingViewProps> = ({
                           const isError = line.status === 'E';
                           const isValid = line.status === 'V';
                           const isLoaded = line.status === 'L' || line.status === 'P';
+                          const isFailed = line.status === 'F';
 
                           return (
                             <TableRow
@@ -513,6 +543,8 @@ export const OrderGroupingView: React.FC<OrderGroupingViewProps> = ({
                               className={`text-xs ${
                                 isError
                                   ? 'bg-rose-500/5 hover:bg-rose-500/10'
+                                  : isFailed
+                                  ? 'bg-amber-500/5 hover:bg-amber-500/10'
                                   : isValid
                                   ? 'bg-emerald-500/5 hover:bg-emerald-500/10'
                                   : isLoaded

@@ -510,7 +510,8 @@ export const ExecutionView: React.FC<ExecutionViewProps> = ({
           </div>
 
           <div
-            className="p-3.5 rounded-lg bg-card border border-border hover:border-amber-500/30 transition-all shadow-sm"
+            onClick={() => onNavigateToGrid('F')}
+            className="p-3.5 rounded-lg bg-card border border-border hover:border-amber-500/30 cursor-pointer transition-all shadow-sm"
           >
             <div className="text-amber-400 text-xs font-medium flex items-center gap-1.5">
               <AlertTriangle className="w-3.5 h-3.5" /> Load Failed / Unloaded
@@ -519,11 +520,11 @@ export const ExecutionView: React.FC<ExecutionViewProps> = ({
               {dbConnected
                 ? (lastLoaderResult !== null
                   ? lastLoaderResult.failed.toLocaleString()
-                  : (counts.failed ?? counts.error).toLocaleString())
+                  : (counts.failed ?? 0).toLocaleString())
                 : '—'}
             </div>
             <div className="text-[11px] text-muted-foreground mt-0.5">
-              {lastLoaderResult !== null ? `From last loader batch` : 'Uncommitted / failed rows'}
+              {lastLoaderResult !== null ? `From last loader batch` : 'STATUS_FLAG = \'F\''}
             </div>
           </div>
         </div>

@@ -58,7 +58,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   const validCount = counts.valid;
   const errorCount = counts.error;
   const loadedCount = counts.loaded;
-  const failedCount = counts.failed ?? counts.error;
+  const failedCount = counts.failed ?? 0;
 
   const successPercent = total > 0 ? Math.round((validCount / total) * 100) : 100;
 
@@ -223,15 +223,18 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         </Card>
 
         {/* Load Failed / Unloaded */}
-        <Card className="border-border hover:border-amber-500/40 transition-all shadow-sm">
+        <Card
+          className="border-border hover:border-amber-500/40 transition-all cursor-pointer shadow-sm"
+          onClick={() => (dbConnected ? onNavigateTab('importer', 'F') : onOpenDbConfig())}
+        >
           <CardContent className="p-4 flex items-center justify-between">
             <div className="space-y-1">
-              <p className="text-xs font-medium text-muted-foreground">Load Failed / Unloaded</p>
+              <p className="text-xs font-medium text-muted-foreground">Load Failed (F)</p>
               <div className="text-2xl font-bold font-mono text-amber-600 dark:text-amber-400">
                 {dbConnected ? failedCount.toLocaleString() : '—'}
               </div>
-              <p className="text-[11px] text-muted-foreground">
-                {dbConnected ? (failedCount === 0 ? 'No uncommitted records' : 'Uncommitted or quarantined') : 'SQL Server required'}
+              <p className="text-[11px] text-muted-foreground font-mono">
+                {dbConnected ? (failedCount === 0 ? 'Zero load failures' : 'STATUS_FLAG = \'F\'') : 'SQL Server required'}
               </p>
             </div>
             <div className="w-10 h-10 rounded-md bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-600 dark:text-amber-400">

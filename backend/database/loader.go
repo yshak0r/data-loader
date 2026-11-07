@@ -59,15 +59,18 @@ func (m *Manager) ExecuteDryRun(ctx context.Context, domain string, scriptConten
 }
 
 func (m *Manager) executeDryRunDc(ctx context.Context, db *sql.DB) (*models.DryRunResult, error) {
-	// Reset status for pending/error rows
+	// Reset pending, error, and load-failed rows so they can be re-validated
 	resetQuery := `
 		UPDATE [FIN].[KAS_DC_LOADS]
 		SET STATUS_FLAG = 'V', RS_MESSAGE_TEXT = ''
-		WHERE STATUS_FLAG IN (' ', 'E');
+		WHERE STATUS_FLAG IN (' ', 'E', 'F');
 	`
 	if _, err := db.ExecContext(ctx, resetQuery); err != nil {
 		return nil, fmt.Errorf("failed to reset DC dry run status: %w", err)
 	}
+
+	// Validation rules only act on rows that have NOT been committed to Ross ERP.
+	// Excludes 'L', 'P' (loaded) — 'F' rows were reset to 'V' above and re-enter validation.
 
 	// 1. Missing Warehouse
 	rule1 := `
@@ -151,11 +154,11 @@ func (m *Manager) executeDryRunDc(ctx context.Context, db *sql.DB) (*models.DryR
 	`
 	_, _ = db.ExecContext(ctx, rule8)
 
-	// Counts
+	// Counts — 'V' means awaiting load, 'F' means load failed (both passed validation)
 	countsQuery := `
 		SELECT 
 			COUNT(*) AS total,
-			ISNULL(SUM(CASE WHEN STATUS_FLAG = 'V' THEN 1 ELSE 0 END), 0) AS valid,
+			ISNULL(SUM(CASE WHEN STATUS_FLAG IN ('V', 'F', 'P', 'L') THEN 1 ELSE 0 END), 0) AS valid,
 			ISNULL(SUM(CASE WHEN STATUS_FLAG = 'E' THEN 1 ELSE 0 END), 0) AS errors,
 			ISNULL(SUM(CASE WHEN STATUS_FLAG IN ('L', 'P') THEN 1 ELSE 0 END), 0) AS loaded,
 			ISNULL(SUM(CASE WHEN STATUS_FLAG = ' ' THEN 1 ELSE 0 END), 0) AS pending
@@ -175,7 +178,7 @@ func (m *Manager) executeDryRunSo(ctx context.Context, db *sql.DB) (*models.DryR
 	resetQuery := `
 		UPDATE [FIN].[KAS_SO_LOADS]
 		SET STATUS_FLAG = 'V', RS_MESSAGE_TEXT = ''
-		WHERE STATUS_FLAG IN (' ', 'E');
+		WHERE STATUS_FLAG IN (' ', 'E', 'F');
 	`
 	if _, err := db.ExecContext(ctx, resetQuery); err != nil {
 		return nil, fmt.Errorf("failed to reset SO dry run status: %w", err)
@@ -270,7 +273,7 @@ func (m *Manager) executeDryRunSo(ctx context.Context, db *sql.DB) (*models.DryR
 	countsQuery := `
 		SELECT 
 			COUNT(*) AS total,
-			ISNULL(SUM(CASE WHEN STATUS_FLAG = 'V' THEN 1 ELSE 0 END), 0) AS valid,
+			ISNULL(SUM(CASE WHEN STATUS_FLAG IN ('V', 'F', 'P', 'L') THEN 1 ELSE 0 END), 0) AS valid,
 			ISNULL(SUM(CASE WHEN STATUS_FLAG = 'E' THEN 1 ELSE 0 END), 0) AS errors,
 			ISNULL(SUM(CASE WHEN STATUS_FLAG IN ('L', 'P') THEN 1 ELSE 0 END), 0) AS loaded,
 			ISNULL(SUM(CASE WHEN STATUS_FLAG = ' ' THEN 1 ELSE 0 END), 0) AS pending
@@ -300,59 +303,63 @@ func (m *Manager) ExecuteLoader(ctx context.Context, domain string, scriptConten
 		tableName = "[FIN].[KAS_SO_LOADS]"
 	}
 
-	// Capture pre-execution counts to accurately compute loaded vs failed metrics
-	var preValidCount, preErrorCount, preLoadedCount int
-	_ = db.QueryRowContext(ctx, fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE STATUS_FLAG = 'V'", tableName)).Scan(&preValidCount)
-	_ = db.QueryRowContext(ctx, fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE STATUS_FLAG = 'E'", tableName)).Scan(&preErrorCount)
-	_ = db.QueryRowContext(ctx, fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE STATUS_FLAG IN ('L', 'P')", tableName)).Scan(&preLoadedCount)
-
 	trimmedScript := strings.TrimSpace(scriptContent)
 	if trimmedScript != "" {
 		if err := m.ExecuteSqlBatches(ctx, trimmedScript); err != nil {
+			// Stamp all remaining 'V' rows as 'F' (load failed)
+			failed := stampFailedRows(ctx, db, tableName, batchID)
 			return &models.LoaderResult{
 				Success: false,
 				Loaded:  0,
-				Failed:  preValidCount + preErrorCount,
+				Failed:  failed,
 				BatchID: batchID,
 				Message: fmt.Sprintf("Loader script error: %v", err),
 			}, nil
 		}
 
-		var postLoadedCount, postErrorCount int
-		_ = db.QueryRowContext(ctx, fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE STATUS_FLAG IN ('L', 'P')", tableName)).Scan(&postLoadedCount)
-		_ = db.QueryRowContext(ctx, fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE STATUS_FLAG = 'E'", tableName)).Scan(&postErrorCount)
+		// Stamp any 'V' rows the custom script didn't process as 'F'
+		failed := stampFailedRows(ctx, db, tableName, batchID)
 
-		newlyLoaded := postLoadedCount - preLoadedCount
-		if newlyLoaded < 0 {
-			newlyLoaded = postLoadedCount
-		}
+		var loadedCount int
+		_ = db.QueryRowContext(ctx, fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE STATUS_FLAG IN ('L', 'P')\n\t\t\tAND BATCH_ID = @p1", tableName), batchID).Scan(&loadedCount)
 
-		failedCount := (preValidCount - newlyLoaded) + postErrorCount
-		if failedCount < 0 {
-			failedCount = postErrorCount
-		}
-
-		msg := fmt.Sprintf("Loader script executed successfully. %d records committed into Ross ERP (Batch: %s).", newlyLoaded, batchID)
-		if failedCount > 0 {
-			msg = fmt.Sprintf("Loader script executed: %d records committed, %d records failed or uncommitted (Batch: %s).", newlyLoaded, failedCount, batchID)
+		msg := fmt.Sprintf("Loader script executed: %d records committed into Ross ERP (Batch: %s).", loadedCount, batchID)
+		if failed > 0 {
+			msg = fmt.Sprintf("Loader script executed: %d committed, %d marked as Load Failed (Batch: %s).", loadedCount, failed, batchID)
 		}
 
 		return &models.LoaderResult{
 			Success: true,
-			Loaded:  newlyLoaded,
-			Failed:  failedCount,
+			Loaded:  loadedCount,
+			Failed:  failed,
 			BatchID: batchID,
 			Message: msg,
 		}, nil
 	}
 
 	if domain == "sales_orders" {
-		return m.executeLoaderSo(ctx, db, batchID, preValidCount, preErrorCount)
+		return m.executeLoaderSo(ctx, db, batchID, tableName)
 	}
-	return m.executeLoaderDc(ctx, db, batchID, preValidCount, preErrorCount)
+	return m.executeLoaderDc(ctx, db, batchID, tableName)
 }
 
-func (m *Manager) executeLoaderDc(ctx context.Context, db *sql.DB, batchID string, preValidCount int, preErrorCount int) (*models.LoaderResult, error) {
+// stampFailedRows marks any remaining 'V' rows as 'F' (Load Failed) and returns the count stamped.
+func stampFailedRows(ctx context.Context, db *sql.DB, tableName string, batchID string) int {
+	res, err := db.ExecContext(ctx, fmt.Sprintf(`
+		UPDATE %s
+		SET STATUS_FLAG = 'F',
+		    BATCH_ID = @p1,
+		    RS_MESSAGE_TEXT = 'Load Failed — record was not committed to Ross ERP'
+		WHERE STATUS_FLAG = 'V'
+	`, tableName), batchID)
+	if err != nil {
+		return 0
+	}
+	n, _ := res.RowsAffected()
+	return int(n)
+}
+
+func (m *Manager) executeLoaderDc(ctx context.Context, db *sql.DB, batchID string, tableName string) (*models.LoaderResult, error) {
 	query := `
 		UPDATE [FIN].[KAS_DC_LOADS]
 		SET STATUS_FLAG = 'P',
@@ -362,25 +369,26 @@ func (m *Manager) executeLoaderDc(ctx context.Context, db *sql.DB, batchID strin
 	`
 	res, err := db.ExecContext(ctx, query, batchID)
 	if err != nil {
+		// Stamp all 'V' rows as 'F' since the transaction failed
+		failed := stampFailedRows(ctx, db, tableName, batchID)
 		return &models.LoaderResult{
 			Success: false,
 			Loaded:  0,
-			Failed:  preValidCount + preErrorCount,
+			Failed:  failed,
 			BatchID: batchID,
-			Message: fmt.Sprintf("failed to execute DC loader: %v", err),
+			Message: fmt.Sprintf("DC loader failed: %v", err),
 		}, nil
 	}
 
 	rowsAffected, _ := res.RowsAffected()
 	loaded := int(rowsAffected)
-	failed := (preValidCount - loaded) + preErrorCount
-	if failed < 0 {
-		failed = preErrorCount
-	}
+
+	// Stamp any 'V' rows not picked up (edge case: row-level constraint) as 'F'
+	failed := stampFailedRows(ctx, db, tableName, batchID)
 
 	msg := fmt.Sprintf("Successfully committed %d records into Ross ERP (Batch: %s)", loaded, batchID)
 	if failed > 0 {
-		msg = fmt.Sprintf("Committed %d records into Ross ERP (Batch: %s). %d records failed or uncommitted.", loaded, batchID, failed)
+		msg = fmt.Sprintf("Committed %d records into Ross ERP; %d marked as Load Failed (Batch: %s)", loaded, failed, batchID)
 	}
 
 	return &models.LoaderResult{
@@ -392,7 +400,7 @@ func (m *Manager) executeLoaderDc(ctx context.Context, db *sql.DB, batchID strin
 	}, nil
 }
 
-func (m *Manager) executeLoaderSo(ctx context.Context, db *sql.DB, batchID string, preValidCount int, preErrorCount int) (*models.LoaderResult, error) {
+func (m *Manager) executeLoaderSo(ctx context.Context, db *sql.DB, batchID string, tableName string) (*models.LoaderResult, error) {
 	// Assign simulated Ross order numbers to distinct order groups
 	distinctOrdersQuery := `
 		SELECT DISTINCT CUSTOMER_NUMBER, DELIVERY_ADDRESS_CODE, CUSTOMER_REFERENCE, ORDER_DATE, SYS_DELIVERY_DATE
@@ -401,10 +409,11 @@ func (m *Manager) executeLoaderSo(ctx context.Context, db *sql.DB, batchID strin
 	`
 	rows, err := db.QueryContext(ctx, distinctOrdersQuery)
 	if err != nil {
+		failed := stampFailedRows(ctx, db, tableName, batchID)
 		return &models.LoaderResult{
 			Success: false,
 			Loaded:  0,
-			Failed:  preValidCount + preErrorCount,
+			Failed:  failed,
 			BatchID: batchID,
 			Message: fmt.Sprintf("failed to query distinct orders: %v", err),
 		}, nil
@@ -447,14 +456,12 @@ func (m *Manager) executeLoaderSo(ctx context.Context, db *sql.DB, batchID strin
 		}
 	}
 
-	failed := (preValidCount - totalUpdated) + preErrorCount
-	if failed < 0 {
-		failed = preErrorCount
-	}
+	// Any 'V' rows still remaining were not committed — mark as 'F'
+	failed := stampFailedRows(ctx, db, tableName, batchID)
 
 	msg := fmt.Sprintf("Successfully committed %d sales order lines across %d orders (Batch: %s)", totalUpdated, len(keys), batchID)
 	if failed > 0 {
-		msg = fmt.Sprintf("Committed %d sales order lines across %d orders (Batch: %s). %d lines failed or uncommitted.", totalUpdated, len(keys), batchID, failed)
+		msg = fmt.Sprintf("Committed %d SO lines across %d orders; %d lines marked as Load Failed (Batch: %s)", totalUpdated, len(keys), failed, batchID)
 	}
 
 	return &models.LoaderResult{

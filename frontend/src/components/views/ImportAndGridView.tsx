@@ -119,6 +119,13 @@ export const ImportAndGridView: React.FC<ImportAndGridViewProps> = ({
             {flag === 'P' ? 'LOADED (P)' : 'LOADED'}
           </span>
         );
+      case 'F':
+        return (
+          <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-amber-800 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/60 border border-amber-300 dark:border-amber-500/30 px-1.5 py-0.5 rounded" title="Load Failed — record was not committed to Ross ERP">
+            <AlertTriangle className="w-3 h-3 text-amber-600 dark:text-amber-400" />
+            LOAD FAILED
+          </span>
+        );
       default:
         return (
           <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-amber-800 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/60 border border-amber-300 dark:border-amber-500/40 px-1.5 py-0.5 rounded" title="Staged in [FIN].[KAS_DC_LOADS] - Click Run Dry Run (SQL) to validate">
@@ -301,6 +308,17 @@ export const ImportAndGridView: React.FC<ImportAndGridViewProps> = ({
             >
               Loaded ({counts.loaded})
             </button>
+            <button
+              onClick={() => onStatusFilterChange('F')}
+              className={`px-2.5 py-1 rounded-sm text-xs font-medium transition-all ${
+                statusFilter === 'F'
+                  ? 'bg-amber-500/15 text-amber-700 dark:text-amber-400 border border-amber-500/30 font-semibold'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+              title="Load Failed — uncommitted or failed during loader (F)"
+            >
+              Failed ({counts.failed || 0})
+            </button>
           </div>
 
           {/* Refresh Grid */}
@@ -443,6 +461,7 @@ export const ImportAndGridView: React.FC<ImportAndGridViewProps> = ({
                 const isError = r.STATUS_FLAG === 'E';
                 const isValid = r.STATUS_FLAG === 'V';
                 const isLoaded = r.STATUS_FLAG === 'L' || r.STATUS_FLAG === 'P';
+                const isFailed = r.STATUS_FLAG === 'F';
 
                 return (
                   <TableRow
@@ -450,6 +469,8 @@ export const ImportAndGridView: React.FC<ImportAndGridViewProps> = ({
                     className={`transition-colors text-xs whitespace-nowrap ${
                       isError
                         ? 'bg-destructive/5 hover:bg-destructive/10 border-l-2 border-l-rose-500'
+                        : isFailed
+                        ? 'bg-amber-500/5 hover:bg-amber-500/10 border-l-2 border-l-amber-500'
                         : isLoaded
                         ? 'bg-secondary/40 hover:bg-secondary/60 border-l-2 border-l-border'
                         : isValid
@@ -551,6 +572,7 @@ export const ImportAndGridView: React.FC<ImportAndGridViewProps> = ({
                 const isError = r.STATUS_FLAG === 'E';
                 const isValid = r.STATUS_FLAG === 'V';
                 const isLoaded = r.STATUS_FLAG === 'L' || r.STATUS_FLAG === 'P';
+                const isFailed = r.STATUS_FLAG === 'F';
 
                 return (
                   <TableRow
@@ -558,6 +580,8 @@ export const ImportAndGridView: React.FC<ImportAndGridViewProps> = ({
                     className={`transition-colors text-xs whitespace-nowrap ${
                       isError
                         ? 'bg-destructive/5 hover:bg-destructive/10 border-l-2 border-l-rose-500'
+                        : isFailed
+                        ? 'bg-amber-500/5 hover:bg-amber-500/10 border-l-2 border-l-amber-500'
                         : isLoaded
                         ? 'bg-secondary/40 hover:bg-secondary/60 border-l-2 border-l-border'
                         : isValid
