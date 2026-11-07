@@ -307,6 +307,7 @@ export namespace models {
 	    valid: number;
 	    error: number;
 	    loaded: number;
+	    failed: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new GridCounts(source);
@@ -318,6 +319,7 @@ export namespace models {
 	        this.valid = source["valid"];
 	        this.error = source["error"];
 	        this.loaded = source["loaded"];
+	        this.failed = source["failed"];
 	    }
 	}
 	export class GridQueryParams {

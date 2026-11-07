@@ -58,6 +58,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   const validCount = counts.valid;
   const errorCount = counts.error;
   const loadedCount = counts.loaded;
+  const failedCount = counts.failed ?? counts.error;
 
   const successPercent = total > 0 ? Math.round((validCount / total) * 100) : 100;
 
@@ -138,7 +139,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       </div>
 
       {/* KPI Cards Row */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
         {/* Total Records in Table */}
         <Card
           className="border-border hover:border-foreground/30 transition-all cursor-pointer shadow-sm"
@@ -160,19 +161,19 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </CardContent>
         </Card>
 
-        {/* Valid Records Passed Dry Run */}
+        {/* Validation Passed */}
         <Card
           className="border-border hover:border-emerald-500/40 transition-all cursor-pointer shadow-sm"
           onClick={() => (dbConnected ? onNavigateTab('importer', 'V') : onOpenDbConfig())}
         >
           <CardContent className="p-4 flex items-center justify-between">
             <div className="space-y-1">
-              <p className="text-xs font-medium text-muted-foreground">Dry Run Passed (Valid)</p>
+              <p className="text-xs font-medium text-muted-foreground">Validation Passed (Valid)</p>
               <div className="text-2xl font-bold font-mono text-emerald-600 dark:text-emerald-400">
                 {dbConnected ? validCount.toLocaleString() : '—'}
               </div>
               <p className="text-[11px] text-muted-foreground">
-                {dbConnected ? `${successPercent}% verified` : 'SQL Server required'}
+                {dbConnected ? `${successPercent}% verified, ready for loader` : 'SQL Server required'}
               </p>
             </div>
             <div className="w-10 h-10 rounded-md bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-600 dark:text-emerald-400">
@@ -181,19 +182,19 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </CardContent>
         </Card>
 
-        {/* Quarantine Errors */}
+        {/* Validation Failed */}
         <Card
           className="border-border hover:border-rose-500/40 transition-all cursor-pointer shadow-sm"
           onClick={() => (dbConnected ? onNavigateTab('importer', 'E') : onOpenDbConfig())}
         >
           <CardContent className="p-4 flex items-center justify-between">
             <div className="space-y-1">
-              <p className="text-xs font-medium text-muted-foreground">Quarantine Errors</p>
+              <p className="text-xs font-medium text-muted-foreground">Validation Failed (Errors)</p>
               <div className="text-2xl font-bold font-mono text-rose-600 dark:text-rose-400">
                 {dbConnected ? errorCount.toLocaleString() : '—'}
               </div>
               <p className="text-[11px] text-muted-foreground">
-                {dbConnected ? (errorCount === 0 ? 'Zero syntax failures' : 'Action required in grid') : 'SQL Server required'}
+                {dbConnected ? (errorCount === 0 ? 'Zero rule violations' : 'Quarantined — action required') : 'SQL Server required'}
               </p>
             </div>
             <div className="w-10 h-10 rounded-md bg-rose-500/10 border border-rose-500/20 flex items-center justify-center text-rose-600 dark:text-rose-400">
@@ -202,21 +203,39 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </CardContent>
         </Card>
 
-        {/* Loaded into Ross ERP */}
+        {/* Load Succeeded */}
         <Card
-          className="border-border hover:border-foreground/30 transition-all cursor-pointer shadow-sm"
+          className="border-border hover:border-sky-500/40 transition-all cursor-pointer shadow-sm"
           onClick={() => (dbConnected ? onNavigateTab('importer', 'L') : onOpenDbConfig())}
         >
           <CardContent className="p-4 flex items-center justify-between">
             <div className="space-y-1">
-              <p className="text-xs font-medium text-muted-foreground">Committed to Ross ERP</p>
-              <div className="text-2xl font-bold font-mono text-foreground">
+              <p className="text-xs font-medium text-muted-foreground">Load Succeeded (Committed)</p>
+              <div className="text-2xl font-bold font-mono text-sky-600 dark:text-sky-400">
                 {dbConnected ? loadedCount.toLocaleString() : '—'}
               </div>
               <p className="text-[11px] text-muted-foreground font-mono">STATUS_FLAG IN ('P', 'L')</p>
             </div>
-            <div className="w-10 h-10 rounded-md bg-secondary border border-border flex items-center justify-center text-muted-foreground">
+            <div className="w-10 h-10 rounded-md bg-sky-500/10 border border-sky-500/20 flex items-center justify-center text-sky-600 dark:text-sky-400">
               <CheckCheck className="w-4 h-4" />
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Load Failed / Unloaded */}
+        <Card className="border-border hover:border-amber-500/40 transition-all shadow-sm">
+          <CardContent className="p-4 flex items-center justify-between">
+            <div className="space-y-1">
+              <p className="text-xs font-medium text-muted-foreground">Load Failed / Unloaded</p>
+              <div className="text-2xl font-bold font-mono text-amber-600 dark:text-amber-400">
+                {dbConnected ? failedCount.toLocaleString() : '—'}
+              </div>
+              <p className="text-[11px] text-muted-foreground">
+                {dbConnected ? (failedCount === 0 ? 'No uncommitted records' : 'Uncommitted or quarantined') : 'SQL Server required'}
+              </p>
+            </div>
+            <div className="w-10 h-10 rounded-md bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-600 dark:text-amber-400">
+              <AlertTriangle className="w-4 h-4" />
             </div>
           </CardContent>
         </Card>

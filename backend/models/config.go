@@ -32,6 +32,7 @@ type GridCounts struct {
 	Valid  int `json:"valid"`
 	Error  int `json:"error"`
 	Loaded int `json:"loaded"`
+	Failed int `json:"failed"`
 }
 
 // GridQueryParams contains grid filtering and pagination criteria.

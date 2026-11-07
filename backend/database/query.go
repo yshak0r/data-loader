@@ -101,6 +101,7 @@ func (m *Manager) QueryGrid(ctx context.Context, params models.GridQueryParams) 
 
 	var counts models.GridCounts
 	_ = db.QueryRowContext(ctx, countsQuery).Scan(&counts.Total, &counts.Valid, &counts.Error, &counts.Loaded)
+	counts.Failed = counts.Error
 
 	// If no rows match, return early with empty slice
 	if totalFiltered == 0 {

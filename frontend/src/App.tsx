@@ -31,6 +31,7 @@ export const App: React.FC = () => {
     valid: 0,
     error: 0,
     loaded: 0,
+    failed: 0,
   });
 
   const [currentPage, setCurrentPage] = useState<number>(1);
@@ -93,7 +94,7 @@ export const App: React.FC = () => {
       setDbConnected(res.connected);
       setGridRows(res.rows || []);
       setTotalRows(res.total || 0);
-      setCounts(res.counts || { total: 0, valid: 0, error: 0, loaded: 0 });
+      setCounts(res.counts || { total: 0, valid: 0, error: 0, loaded: 0, failed: 0 });
     } catch (err) {
       console.warn('Grid query notice:', err);
       // Verify actual connectivity so a staging table or grid query issue does not falsely mark DB as offline
@@ -258,9 +259,15 @@ export const App: React.FC = () => {
     try {
       const res = await dbClient.executeLoader(domain);
       if (res.success) {
-        setLastStagedInfo(
-          `Batch Committed: ${res.loaded} records loaded into Ross ERP (Batch ${res.batchId})`
-        );
+        if (res.failed > 0) {
+          setLastStagedInfo(
+            `Batch Committed: ${res.loaded} records loaded into Ross ERP, ${res.failed} failed/uncommitted (Batch ${res.batchId})`
+          );
+        } else {
+          setLastStagedInfo(
+            `Batch Committed: ${res.loaded} records loaded into Ross ERP (Batch ${res.batchId})`
+          );
+        }
       } else {
         alert(res.message);
       }
@@ -372,7 +379,7 @@ export const App: React.FC = () => {
           setDomain(d);
           setGridRows([]);
           setTotalRows(0);
-          setCounts({ total: 0, valid: 0, error: 0, loaded: 0 });
+          setCounts({ total: 0, valid: 0, error: 0, loaded: 0, failed: 0 });
           setCurrentPage(1);
           setStatusFilter('ALL');
           setSearchQuery('');

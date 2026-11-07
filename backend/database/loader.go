@@ -295,39 +295,64 @@ func (m *Manager) ExecuteLoader(ctx context.Context, domain string, scriptConten
 
 	batchID := fmt.Sprintf("BATCH-%s-%04d", time.Now().Format("20060102150405"), rand.Intn(10000))
 
+	tableName := "[FIN].[KAS_DC_LOADS]"
+	if domain == "sales_orders" {
+		tableName = "[FIN].[KAS_SO_LOADS]"
+	}
+
+	// Capture pre-execution counts to accurately compute loaded vs failed metrics
+	var preValidCount, preErrorCount, preLoadedCount int
+	_ = db.QueryRowContext(ctx, fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE STATUS_FLAG = 'V'", tableName)).Scan(&preValidCount)
+	_ = db.QueryRowContext(ctx, fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE STATUS_FLAG = 'E'", tableName)).Scan(&preErrorCount)
+	_ = db.QueryRowContext(ctx, fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE STATUS_FLAG IN ('L', 'P')", tableName)).Scan(&preLoadedCount)
+
 	trimmedScript := strings.TrimSpace(scriptContent)
 	if trimmedScript != "" {
 		if err := m.ExecuteSqlBatches(ctx, trimmedScript); err != nil {
 			return &models.LoaderResult{
 				Success: false,
+				Loaded:  0,
+				Failed:  preValidCount + preErrorCount,
+				BatchID: batchID,
 				Message: fmt.Sprintf("Loader script error: %v", err),
 			}, nil
 		}
 
-		tableName := "[FIN].[KAS_DC_LOADS]"
-		if domain == "sales_orders" {
-			tableName = "[FIN].[KAS_SO_LOADS]"
+		var postLoadedCount, postErrorCount int
+		_ = db.QueryRowContext(ctx, fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE STATUS_FLAG IN ('L', 'P')", tableName)).Scan(&postLoadedCount)
+		_ = db.QueryRowContext(ctx, fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE STATUS_FLAG = 'E'", tableName)).Scan(&postErrorCount)
+
+		newlyLoaded := postLoadedCount - preLoadedCount
+		if newlyLoaded < 0 {
+			newlyLoaded = postLoadedCount
 		}
 
-		var loadedCount int
-		_ = db.QueryRowContext(ctx, fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE STATUS_FLAG IN ('L', 'P')", tableName)).Scan(&loadedCount)
+		failedCount := (preValidCount - newlyLoaded) + postErrorCount
+		if failedCount < 0 {
+			failedCount = postErrorCount
+		}
+
+		msg := fmt.Sprintf("Loader script executed successfully. %d records committed into Ross ERP (Batch: %s).", newlyLoaded, batchID)
+		if failedCount > 0 {
+			msg = fmt.Sprintf("Loader script executed: %d records committed, %d records failed or uncommitted (Batch: %s).", newlyLoaded, failedCount, batchID)
+		}
 
 		return &models.LoaderResult{
 			Success: true,
-			Loaded:  loadedCount,
-			Failed:  0,
+			Loaded:  newlyLoaded,
+			Failed:  failedCount,
 			BatchID: batchID,
-			Message: fmt.Sprintf("Loader script executed successfully. %d records currently marked as Loaded.", loadedCount),
+			Message: msg,
 		}, nil
 	}
 
 	if domain == "sales_orders" {
-		return m.executeLoaderSo(ctx, db, batchID)
+		return m.executeLoaderSo(ctx, db, batchID, preValidCount, preErrorCount)
 	}
-	return m.executeLoaderDc(ctx, db, batchID)
+	return m.executeLoaderDc(ctx, db, batchID, preValidCount, preErrorCount)
 }
 
-func (m *Manager) executeLoaderDc(ctx context.Context, db *sql.DB, batchID string) (*models.LoaderResult, error) {
+func (m *Manager) executeLoaderDc(ctx context.Context, db *sql.DB, batchID string, preValidCount int, preErrorCount int) (*models.LoaderResult, error) {
 	query := `
 		UPDATE [FIN].[KAS_DC_LOADS]
 		SET STATUS_FLAG = 'P',
@@ -337,20 +362,37 @@ func (m *Manager) executeLoaderDc(ctx context.Context, db *sql.DB, batchID strin
 	`
 	res, err := db.ExecContext(ctx, query, batchID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to execute DC loader: %w", err)
+		return &models.LoaderResult{
+			Success: false,
+			Loaded:  0,
+			Failed:  preValidCount + preErrorCount,
+			BatchID: batchID,
+			Message: fmt.Sprintf("failed to execute DC loader: %v", err),
+		}, nil
 	}
 
 	rowsAffected, _ := res.RowsAffected()
+	loaded := int(rowsAffected)
+	failed := (preValidCount - loaded) + preErrorCount
+	if failed < 0 {
+		failed = preErrorCount
+	}
+
+	msg := fmt.Sprintf("Successfully committed %d records into Ross ERP (Batch: %s)", loaded, batchID)
+	if failed > 0 {
+		msg = fmt.Sprintf("Committed %d records into Ross ERP (Batch: %s). %d records failed or uncommitted.", loaded, batchID, failed)
+	}
+
 	return &models.LoaderResult{
 		Success: true,
-		Loaded:  int(rowsAffected),
-		Failed:  0,
+		Loaded:  loaded,
+		Failed:  failed,
 		BatchID: batchID,
-		Message: fmt.Sprintf("Successfully committed %d records into Ross ERP (Batch: %s)", rowsAffected, batchID),
+		Message: msg,
 	}, nil
 }
 
-func (m *Manager) executeLoaderSo(ctx context.Context, db *sql.DB, batchID string) (*models.LoaderResult, error) {
+func (m *Manager) executeLoaderSo(ctx context.Context, db *sql.DB, batchID string, preValidCount int, preErrorCount int) (*models.LoaderResult, error) {
 	// Assign simulated Ross order numbers to distinct order groups
 	distinctOrdersQuery := `
 		SELECT DISTINCT CUSTOMER_NUMBER, DELIVERY_ADDRESS_CODE, CUSTOMER_REFERENCE, ORDER_DATE, SYS_DELIVERY_DATE
@@ -359,7 +401,13 @@ func (m *Manager) executeLoaderSo(ctx context.Context, db *sql.DB, batchID strin
 	`
 	rows, err := db.QueryContext(ctx, distinctOrdersQuery)
 	if err != nil {
-		return nil, fmt.Errorf("failed to query distinct orders: %w", err)
+		return &models.LoaderResult{
+			Success: false,
+			Loaded:  0,
+			Failed:  preValidCount + preErrorCount,
+			BatchID: batchID,
+			Message: fmt.Sprintf("failed to query distinct orders: %v", err),
+		}, nil
 	}
 	defer rows.Close()
 
@@ -399,12 +447,22 @@ func (m *Manager) executeLoaderSo(ctx context.Context, db *sql.DB, batchID strin
 		}
 	}
 
+	failed := (preValidCount - totalUpdated) + preErrorCount
+	if failed < 0 {
+		failed = preErrorCount
+	}
+
+	msg := fmt.Sprintf("Successfully committed %d sales order lines across %d orders (Batch: %s)", totalUpdated, len(keys), batchID)
+	if failed > 0 {
+		msg = fmt.Sprintf("Committed %d sales order lines across %d orders (Batch: %s). %d lines failed or uncommitted.", totalUpdated, len(keys), batchID, failed)
+	}
+
 	return &models.LoaderResult{
 		Success: true,
 		Loaded:  totalUpdated,
-		Failed:  0,
+		Failed:  failed,
 		BatchID: batchID,
-		Message: fmt.Sprintf("Successfully committed %d sales order lines across %d orders (Batch: %s)", totalUpdated, len(keys), batchID),
+		Message: msg,
 	}, nil
 }
 

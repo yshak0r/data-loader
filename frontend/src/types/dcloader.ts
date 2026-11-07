@@ -167,6 +167,7 @@ export interface GridCounts {
   valid: number;
   error: number;
   loaded: number;
+  failed?: number;
 }
 
 export interface DatabaseConfig {

@@ -79,6 +79,7 @@ export const ExecutionView: React.FC<ExecutionViewProps> = ({
   ]);
   const [isCompleted, setIsCompleted] = useState(false);
   const [ruleBreakdown, setRuleBreakdown] = useState<RuleBreakdownItem[]>([]);
+  const [lastLoaderResult, setLastLoaderResult] = useState<{ loaded: number; failed: number; batchId: string } | null>(null);
   const [activeScripts, setActiveScripts] = useState<Record<SqlScriptSlot, SqlScriptInfo> | null>(null);
   const terminalRef = useRef<HTMLDivElement>(null);
 
@@ -256,6 +257,11 @@ export const ExecutionView: React.FC<ExecutionViewProps> = ({
           } else {
             addLog('warn', `${res.message}`);
           }
+          if (res.failed > 0) {
+            addLog('warn', `${res.failed} records failed to load or remain uncommitted (STATUS_FLAG != 'P'/'L').`);
+          }
+
+          setLastLoaderResult({ loaded: res.loaded, failed: res.failed ?? 0, batchId: res.batchId });
 
           setProgress(90);
           setActiveStep(4);
@@ -452,7 +458,7 @@ export const ExecutionView: React.FC<ExecutionViewProps> = ({
       {/* Main Execution Content */}
       <div className="flex-1 overflow-y-auto p-6 space-y-5 bg-background">
         {/* Status Metrics Cards */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
           <div
             onClick={() => onNavigateToGrid('ALL')}
             className="p-3.5 rounded-lg bg-card border border-border hover:border-zinc-700 cursor-pointer transition-all shadow-sm"
@@ -461,7 +467,7 @@ export const ExecutionView: React.FC<ExecutionViewProps> = ({
             <div className="text-xl font-bold font-mono text-foreground mt-1">
               {dbConnected ? counts.total.toLocaleString() : '—'}
             </div>
-            <div className="text-[11px] text-muted-foreground mt-0.5 font-mono">[FIN].[KAS_DC_LOADS]</div>
+            <div className="text-[11px] text-muted-foreground mt-0.5 font-mono">{tableName}</div>
           </div>
 
           <div
@@ -469,12 +475,12 @@ export const ExecutionView: React.FC<ExecutionViewProps> = ({
             className="p-3.5 rounded-lg bg-card border border-border hover:border-emerald-500/30 cursor-pointer transition-all shadow-sm"
           >
             <div className="text-emerald-400 text-xs font-medium flex items-center gap-1.5">
-              <CheckCircle2 className="w-3.5 h-3.5" /> Verified Valid (V)
+              <CheckCircle2 className="w-3.5 h-3.5" /> Validation Passed (V)
             </div>
             <div className="text-xl font-bold font-mono text-emerald-400 mt-1">
               {dbConnected ? counts.valid.toLocaleString() : '—'}
             </div>
-            <div className="text-[11px] text-muted-foreground mt-0.5">Ready for loader</div>
+            <div className="text-[11px] text-muted-foreground mt-0.5">Verified, ready for loader</div>
           </div>
 
           <div
@@ -482,27 +488,87 @@ export const ExecutionView: React.FC<ExecutionViewProps> = ({
             className="p-3.5 rounded-lg bg-card border border-border hover:border-rose-500/30 cursor-pointer transition-all shadow-sm"
           >
             <div className="text-rose-400 text-xs font-medium flex items-center gap-1.5">
-              <AlertOctagon className="w-3.5 h-3.5" /> Error Quarantine (E)
+              <AlertOctagon className="w-3.5 h-3.5" /> Validation Failed (E)
             </div>
             <div className="text-xl font-bold font-mono text-rose-400 mt-1">
               {dbConnected ? counts.error.toLocaleString() : '—'}
             </div>
-            <div className="text-[11px] text-muted-foreground mt-0.5">Require correction</div>
+            <div className="text-[11px] text-muted-foreground mt-0.5">Quarantined rule errors</div>
           </div>
 
           <div
             onClick={() => onNavigateToGrid('L')}
-            className="p-3.5 rounded-lg bg-card border border-border hover:border-zinc-700 cursor-pointer transition-all shadow-sm"
+            className="p-3.5 rounded-lg bg-card border border-border hover:border-sky-500/30 cursor-pointer transition-all shadow-sm"
           >
-            <div className="text-foreground text-xs font-medium flex items-center gap-1.5">
-              <CheckCheck className="w-3.5 h-3.5 text-muted-foreground" /> Loaded into Ross (L)
+            <div className="text-sky-400 text-xs font-medium flex items-center gap-1.5">
+              <CheckCheck className="w-3.5 h-3.5" /> Load Succeeded (P/L)
             </div>
-            <div className="text-xl font-bold font-mono text-foreground mt-1">
+            <div className="text-xl font-bold font-mono text-sky-400 mt-1">
               {dbConnected ? counts.loaded.toLocaleString() : '—'}
             </div>
-            <div className="text-[11px] text-muted-foreground mt-0.5">Batch committed</div>
+            <div className="text-[11px] text-muted-foreground mt-0.5">Committed to Ross ERP</div>
+          </div>
+
+          <div
+            className="p-3.5 rounded-lg bg-card border border-border hover:border-amber-500/30 transition-all shadow-sm"
+          >
+            <div className="text-amber-400 text-xs font-medium flex items-center gap-1.5">
+              <AlertTriangle className="w-3.5 h-3.5" /> Load Failed / Unloaded
+            </div>
+            <div className="text-xl font-bold font-mono text-amber-400 mt-1">
+              {dbConnected
+                ? (lastLoaderResult !== null
+                  ? lastLoaderResult.failed.toLocaleString()
+                  : (counts.failed ?? counts.error).toLocaleString())
+                : '—'}
+            </div>
+            <div className="text-[11px] text-muted-foreground mt-0.5">
+              {lastLoaderResult !== null ? `From last loader batch` : 'Uncommitted / failed rows'}
+            </div>
           </div>
         </div>
+
+        {/* Load Outcome Summary Banner — shown after a loader batch completes */}
+        {lastLoaderResult !== null && executionMode === 'loader' && (
+          <div className={`rounded-lg border px-4 py-3 flex flex-wrap items-center gap-4 text-sm shadow-sm ${
+            lastLoaderResult.failed === 0
+              ? 'border-sky-500/30 bg-sky-500/10'
+              : 'border-amber-500/30 bg-amber-500/10'
+          }`}>
+            <div className="flex items-center gap-2 font-semibold text-foreground">
+              {lastLoaderResult.failed === 0
+                ? <CheckCheck className="w-4 h-4 text-sky-400" />
+                : <AlertTriangle className="w-4 h-4 text-amber-400" />
+              }
+              Loader Batch Outcome
+            </div>
+            <div className="flex items-center gap-1.5 text-xs font-mono text-muted-foreground">
+              Batch:
+              <span className="text-foreground font-semibold">{lastLoaderResult.batchId}</span>
+            </div>
+            <div className="flex items-center gap-3 ml-auto">
+              <span className="flex items-center gap-1.5 text-xs text-sky-400 font-medium">
+                <CheckCircle2 className="w-3.5 h-3.5" />
+                {lastLoaderResult.loaded.toLocaleString()} committed
+              </span>
+              {lastLoaderResult.failed > 0 && (
+                <span className="flex items-center gap-1.5 text-xs text-amber-400 font-medium">
+                  <AlertOctagon className="w-3.5 h-3.5" />
+                  {lastLoaderResult.failed.toLocaleString()} failed / uncommitted
+                </span>
+              )}
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => onNavigateToGrid()}
+                className="h-7 text-xs font-medium"
+              >
+                View Grid
+                <ArrowRight className="w-3 h-3 ml-1" />
+              </Button>
+            </div>
+          </div>
+        )}
 
         {/* Progress & Stepper */}
         <Card className="border-border shadow-sm">
