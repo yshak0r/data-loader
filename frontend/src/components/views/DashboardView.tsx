@@ -213,7 +213,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               <div className="text-2xl font-bold font-mono text-foreground">
                 {dbConnected ? loadedCount.toLocaleString() : '—'}
               </div>
-              <p className="text-[11px] text-muted-foreground font-mono">STATUS_FLAG = 'L'</p>
+              <p className="text-[11px] text-muted-foreground font-mono">STATUS_FLAG IN ('P', 'L')</p>
             </div>
             <div className="w-10 h-10 rounded-md bg-secondary border border-border flex items-center justify-center text-muted-foreground">
               <CheckCheck className="w-4 h-4" />

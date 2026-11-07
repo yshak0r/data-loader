@@ -43,9 +43,13 @@ func (m *Manager) QueryGrid(ctx context.Context, params models.GridQueryParams) 
 	// Status filter
 	status := strings.TrimSpace(params.StatusFilter)
 	if status != "" && status != "ALL" {
-		conditions = append(conditions, fmt.Sprintf("STATUS_FLAG = @p%d", argIdx))
-		args = append(args, status)
-		argIdx++
+		if strings.EqualFold(status, "L") || strings.EqualFold(status, "P") || strings.EqualFold(status, "LOADED") {
+			conditions = append(conditions, "STATUS_FLAG IN ('L', 'P')")
+		} else {
+			conditions = append(conditions, fmt.Sprintf("STATUS_FLAG = @p%d", argIdx))
+			args = append(args, status)
+			argIdx++
+		}
 	}
 
 	// Text search
@@ -91,7 +95,7 @@ func (m *Manager) QueryGrid(ctx context.Context, params models.GridQueryParams) 
 			COUNT(*) AS total,
 			ISNULL(SUM(CASE WHEN STATUS_FLAG = 'V' THEN 1 ELSE 0 END), 0) AS valid,
 			ISNULL(SUM(CASE WHEN STATUS_FLAG = 'E' THEN 1 ELSE 0 END), 0) AS error,
-			ISNULL(SUM(CASE WHEN STATUS_FLAG = 'L' THEN 1 ELSE 0 END), 0) AS loaded
+			ISNULL(SUM(CASE WHEN STATUS_FLAG IN ('L', 'P') THEN 1 ELSE 0 END), 0) AS loaded
 		FROM %s
 	`, tableName)
 

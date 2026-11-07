@@ -112,7 +112,7 @@ export const OrderGroupingView: React.FC<OrderGroupingViewProps> = ({
 
     // Derive overall status per group
     return Array.from(groupMap.values()).map((grp) => {
-      const allLoaded = grp.lines.every((l) => l.status === 'L');
+      const allLoaded = grp.lines.every((l) => l.status === 'L' || l.status === 'P');
       const allValid = grp.lines.every((l) => l.status === 'V');
       const anyError = grp.lines.some((l) => l.status === 'E');
 
@@ -226,10 +226,11 @@ export const OrderGroupingView: React.FC<OrderGroupingViewProps> = ({
           </span>
         );
       case 'L':
+      case 'P':
         return (
           <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-sky-700 dark:text-sky-400 bg-sky-500/10 px-1.5 py-0.5 rounded border border-sky-500/30">
             <CheckCheck className="w-3 h-3" />
-            Loaded
+            {flag === 'P' ? 'Loaded (P)' : 'Loaded'}
           </span>
         );
       default:
@@ -504,7 +505,7 @@ export const OrderGroupingView: React.FC<OrderGroupingViewProps> = ({
                         {grp.lines.map((line) => {
                           const isError = line.status === 'E';
                           const isValid = line.status === 'V';
-                          const isLoaded = line.status === 'L';
+                          const isLoaded = line.status === 'L' || line.status === 'P';
 
                           return (
                             <TableRow

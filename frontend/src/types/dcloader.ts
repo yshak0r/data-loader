@@ -78,7 +78,7 @@ export interface KasDcLoadRecord {
   QTY_1: number;
   UOM_2: string | null;
   QTY_2: number;
-  STATUS_FLAG: string; // ' ' (Pending), 'V' (Valid), 'E' (Error), 'L' (Loaded)
+  STATUS_FLAG: string; // ' ' (Pending), 'V' (Valid), 'E' (Error), 'P' / 'L' (Loaded/Processed)
   RS_MESSAGE_TEXT: string;
   DC_LICENSE_PLATE_LINE: number;
   UNIT_COST: number | null;
@@ -122,7 +122,7 @@ export interface KasSoLoadRecord {
   FREIGHT: number;
   ORDER_LINE_NUMBER: number;
   ORDER_NUMBER: string | null;
-  STATUS_FLAG: string; // ' ' (Pending), 'V' (Valid), 'E' (Error), 'L' (Loaded)
+  STATUS_FLAG: string; // ' ' (Pending), 'V' (Valid), 'E' (Error), 'P' / 'L' (Loaded/Processed)
   RS_MESSAGE_TEXT: string;
   BATCH_DATE?: string | null;
 }

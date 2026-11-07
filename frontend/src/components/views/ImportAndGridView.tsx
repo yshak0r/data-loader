@@ -112,10 +112,11 @@ export const ImportAndGridView: React.FC<ImportAndGridViewProps> = ({
           </span>
         );
       case 'L':
+      case 'P':
         return (
           <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-sky-800 dark:text-sky-300 bg-sky-50 dark:bg-sky-950/60 border border-sky-300 dark:border-sky-500/30 px-1.5 py-0.5 rounded">
             <CheckCheck className="w-3 h-3 text-sky-600 dark:text-sky-400" />
-            LOADED
+            {flag === 'P' ? 'LOADED (P)' : 'LOADED'}
           </span>
         );
       default:
@@ -293,7 +294,7 @@ export const ImportAndGridView: React.FC<ImportAndGridViewProps> = ({
             <button
               onClick={() => onStatusFilterChange('L')}
               className={`px-2.5 py-1 rounded-sm text-xs font-medium transition-all ${
-                statusFilter === 'L'
+                statusFilter === 'L' || statusFilter === 'P'
                   ? 'bg-secondary text-foreground font-semibold border border-border'
                   : 'text-muted-foreground hover:text-foreground'
               }`}
@@ -441,7 +442,7 @@ export const ImportAndGridView: React.FC<ImportAndGridViewProps> = ({
               {rows.map((r: any) => {
                 const isError = r.STATUS_FLAG === 'E';
                 const isValid = r.STATUS_FLAG === 'V';
-                const isLoaded = r.STATUS_FLAG === 'L';
+                const isLoaded = r.STATUS_FLAG === 'L' || r.STATUS_FLAG === 'P';
 
                 return (
                   <TableRow
@@ -549,7 +550,7 @@ export const ImportAndGridView: React.FC<ImportAndGridViewProps> = ({
               {rows.map((r) => {
                 const isError = r.STATUS_FLAG === 'E';
                 const isValid = r.STATUS_FLAG === 'V';
-                const isLoaded = r.STATUS_FLAG === 'L';
+                const isLoaded = r.STATUS_FLAG === 'L' || r.STATUS_FLAG === 'P';
 
                 return (
                   <TableRow

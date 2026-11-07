@@ -37,7 +37,7 @@ func (m *Manager) ExecuteDryRun(ctx context.Context, domain string, scriptConten
 				COUNT(*) AS total,
 				ISNULL(SUM(CASE WHEN STATUS_FLAG = 'V' THEN 1 ELSE 0 END), 0) AS valid,
 				ISNULL(SUM(CASE WHEN STATUS_FLAG = 'E' THEN 1 ELSE 0 END), 0) AS errors,
-				ISNULL(SUM(CASE WHEN STATUS_FLAG = 'L' THEN 1 ELSE 0 END), 0) AS loaded,
+				ISNULL(SUM(CASE WHEN STATUS_FLAG IN ('L', 'P') THEN 1 ELSE 0 END), 0) AS loaded,
 				ISNULL(SUM(CASE WHEN STATUS_FLAG = ' ' THEN 1 ELSE 0 END), 0) AS pending
 			FROM %s
 		`, tableName)
@@ -74,7 +74,7 @@ func (m *Manager) executeDryRunDc(ctx context.Context, db *sql.DB) (*models.DryR
 		UPDATE [FIN].[KAS_DC_LOADS]
 		SET STATUS_FLAG = 'E',
 		    RS_MESSAGE_TEXT = CASE WHEN RS_MESSAGE_TEXT = '' THEN 'Missing Warehouse' ELSE RS_MESSAGE_TEXT + '; Missing Warehouse' END
-		WHERE (WAREHOUSE IS NULL OR LTRIM(RTRIM(WAREHOUSE)) = '') AND STATUS_FLAG != 'L';
+		WHERE (WAREHOUSE IS NULL OR LTRIM(RTRIM(WAREHOUSE)) = '') AND STATUS_FLAG NOT IN ('L', 'P');
 	`
 	_, _ = db.ExecContext(ctx, rule1)
 
@@ -83,7 +83,7 @@ func (m *Manager) executeDryRunDc(ctx context.Context, db *sql.DB) (*models.DryR
 		UPDATE [FIN].[KAS_DC_LOADS]
 		SET STATUS_FLAG = 'E',
 		    RS_MESSAGE_TEXT = CASE WHEN RS_MESSAGE_TEXT = '' THEN 'Missing Part Code' ELSE RS_MESSAGE_TEXT + '; Missing Part Code' END
-		WHERE (PART_CODE IS NULL OR LTRIM(RTRIM(PART_CODE)) = '') AND STATUS_FLAG != 'L';
+		WHERE (PART_CODE IS NULL OR LTRIM(RTRIM(PART_CODE)) = '') AND STATUS_FLAG NOT IN ('L', 'P');
 	`
 	_, _ = db.ExecContext(ctx, rule2)
 
@@ -92,7 +92,7 @@ func (m *Manager) executeDryRunDc(ctx context.Context, db *sql.DB) (*models.DryR
 		UPDATE [FIN].[KAS_DC_LOADS]
 		SET STATUS_FLAG = 'E',
 		    RS_MESSAGE_TEXT = CASE WHEN RS_MESSAGE_TEXT = '' THEN 'Missing Lot Number' ELSE RS_MESSAGE_TEXT + '; Missing Lot Number' END
-		WHERE (IC_LOT_NUMBER IS NULL OR LTRIM(RTRIM(IC_LOT_NUMBER)) = '') AND STATUS_FLAG != 'L';
+		WHERE (IC_LOT_NUMBER IS NULL OR LTRIM(RTRIM(IC_LOT_NUMBER)) = '') AND STATUS_FLAG NOT IN ('L', 'P');
 	`
 	_, _ = db.ExecContext(ctx, rule3)
 
@@ -101,7 +101,7 @@ func (m *Manager) executeDryRunDc(ctx context.Context, db *sql.DB) (*models.DryR
 		UPDATE [FIN].[KAS_DC_LOADS]
 		SET STATUS_FLAG = 'E',
 		    RS_MESSAGE_TEXT = CASE WHEN RS_MESSAGE_TEXT = '' THEN 'Missing Bin Location' ELSE RS_MESSAGE_TEXT + '; Missing Bin Location' END
-		WHERE (BIN_LOCATION IS NULL OR LTRIM(RTRIM(BIN_LOCATION)) = '') AND STATUS_FLAG != 'L';
+		WHERE (BIN_LOCATION IS NULL OR LTRIM(RTRIM(BIN_LOCATION)) = '') AND STATUS_FLAG NOT IN ('L', 'P');
 	`
 	_, _ = db.ExecContext(ctx, rule4)
 
@@ -110,7 +110,7 @@ func (m *Manager) executeDryRunDc(ctx context.Context, db *sql.DB) (*models.DryR
 		UPDATE [FIN].[KAS_DC_LOADS]
 		SET STATUS_FLAG = 'E',
 		    RS_MESSAGE_TEXT = CASE WHEN RS_MESSAGE_TEXT = '' THEN 'Quantity must be greater than 0' ELSE RS_MESSAGE_TEXT + '; Quantity must be greater than 0' END
-		WHERE QTY_1 <= 0 AND STATUS_FLAG != 'L';
+		WHERE QTY_1 <= 0 AND STATUS_FLAG NOT IN ('L', 'P');
 	`
 	_, _ = db.ExecContext(ctx, rule5)
 
@@ -119,7 +119,7 @@ func (m *Manager) executeDryRunDc(ctx context.Context, db *sql.DB) (*models.DryR
 		UPDATE [FIN].[KAS_DC_LOADS]
 		SET STATUS_FLAG = 'E',
 		    RS_MESSAGE_TEXT = CASE WHEN RS_MESSAGE_TEXT = '' THEN 'Missing LPN ID' ELSE RS_MESSAGE_TEXT + '; Missing LPN ID' END
-		WHERE (DC_LICENSE_PLATE_ID IS NULL OR LTRIM(RTRIM(DC_LICENSE_PLATE_ID)) = '') AND STATUS_FLAG != 'L';
+		WHERE (DC_LICENSE_PLATE_ID IS NULL OR LTRIM(RTRIM(DC_LICENSE_PLATE_ID)) = '') AND STATUS_FLAG NOT IN ('L', 'P');
 	`
 	_, _ = db.ExecContext(ctx, rule6)
 
@@ -131,7 +131,7 @@ func (m *Manager) executeDryRunDc(ctx context.Context, db *sql.DB) (*models.DryR
 			SET STATUS_FLAG = 'E',
 			    RS_MESSAGE_TEXT = CASE WHEN RS_MESSAGE_TEXT = '' THEN 'Invalid Warehouse Code' ELSE RS_MESSAGE_TEXT + '; Invalid Warehouse Code' END
 			FROM [FIN].[KAS_DC_LOADS] t
-			WHERE STATUS_FLAG != 'L'
+			WHERE STATUS_FLAG NOT IN ('L', 'P')
 			  AND NOT EXISTS (SELECT 1 FROM WAREHOUSE w WHERE w.WAREHOUSE = t.WAREHOUSE);
 		END
 	`
@@ -145,7 +145,7 @@ func (m *Manager) executeDryRunDc(ctx context.Context, db *sql.DB) (*models.DryR
 			SET STATUS_FLAG = 'E',
 			    RS_MESSAGE_TEXT = CASE WHEN RS_MESSAGE_TEXT = '' THEN 'Invalid Part Code' ELSE RS_MESSAGE_TEXT + '; Invalid Part Code' END
 			FROM [FIN].[KAS_DC_LOADS] t
-			WHERE STATUS_FLAG != 'L'
+			WHERE STATUS_FLAG NOT IN ('L', 'P')
 			  AND NOT EXISTS (SELECT 1 FROM ITEM i WHERE i.PART_CODE = t.PART_CODE);
 		END
 	`
@@ -157,7 +157,7 @@ func (m *Manager) executeDryRunDc(ctx context.Context, db *sql.DB) (*models.DryR
 			COUNT(*) AS total,
 			ISNULL(SUM(CASE WHEN STATUS_FLAG = 'V' THEN 1 ELSE 0 END), 0) AS valid,
 			ISNULL(SUM(CASE WHEN STATUS_FLAG = 'E' THEN 1 ELSE 0 END), 0) AS errors,
-			ISNULL(SUM(CASE WHEN STATUS_FLAG = 'L' THEN 1 ELSE 0 END), 0) AS loaded,
+			ISNULL(SUM(CASE WHEN STATUS_FLAG IN ('L', 'P') THEN 1 ELSE 0 END), 0) AS loaded,
 			ISNULL(SUM(CASE WHEN STATUS_FLAG = ' ' THEN 1 ELSE 0 END), 0) AS pending
 		FROM [FIN].[KAS_DC_LOADS]
 	`
@@ -204,7 +204,7 @@ func (m *Manager) executeDryRunSo(ctx context.Context, db *sql.DB) (*models.DryR
 		UPDATE [FIN].[KAS_SO_LOADS]
 		SET STATUS_FLAG = 'E',
 		    RS_MESSAGE_TEXT = CASE WHEN RS_MESSAGE_TEXT = '' THEN 'Missing Warehouse' ELSE RS_MESSAGE_TEXT + '; Missing Warehouse' END
-		WHERE (WAREHOUSE IS NULL OR LTRIM(RTRIM(WAREHOUSE)) = '') AND STATUS_FLAG != 'L';
+		WHERE (WAREHOUSE IS NULL OR LTRIM(RTRIM(WAREHOUSE)) = '') AND STATUS_FLAG NOT IN ('L', 'P');
 	`
 	_, _ = db.ExecContext(ctx, rule3)
 
@@ -213,7 +213,7 @@ func (m *Manager) executeDryRunSo(ctx context.Context, db *sql.DB) (*models.DryR
 		UPDATE [FIN].[KAS_SO_LOADS]
 		SET STATUS_FLAG = 'E',
 		    RS_MESSAGE_TEXT = CASE WHEN RS_MESSAGE_TEXT = '' THEN 'Quantity must be > 0' ELSE RS_MESSAGE_TEXT + '; Quantity must be > 0' END
-		WHERE QUANTITY_1 <= 0 AND STATUS_FLAG != 'L';
+		WHERE QUANTITY_1 <= 0 AND STATUS_FLAG NOT IN ('L', 'P');
 	`
 	_, _ = db.ExecContext(ctx, rule4)
 
@@ -222,7 +222,7 @@ func (m *Manager) executeDryRunSo(ctx context.Context, db *sql.DB) (*models.DryR
 		UPDATE [FIN].[KAS_SO_LOADS]
 		SET STATUS_FLAG = 'E',
 		    RS_MESSAGE_TEXT = CASE WHEN RS_MESSAGE_TEXT = '' THEN 'Sales Price cannot be negative' ELSE RS_MESSAGE_TEXT + '; Sales Price cannot be negative' END
-		WHERE SALES_PRICE < 0 AND STATUS_FLAG != 'L';
+		WHERE SALES_PRICE < 0 AND STATUS_FLAG NOT IN ('L', 'P');
 	`
 	_, _ = db.ExecContext(ctx, rule5)
 
@@ -231,7 +231,7 @@ func (m *Manager) executeDryRunSo(ctx context.Context, db *sql.DB) (*models.DryR
 		UPDATE [FIN].[KAS_SO_LOADS]
 		SET STATUS_FLAG = 'E',
 		    RS_MESSAGE_TEXT = CASE WHEN RS_MESSAGE_TEXT = '' THEN 'Missing Customer Reference (PO#)' ELSE RS_MESSAGE_TEXT + '; Missing Customer Reference (PO#)' END
-		WHERE (CUSTOMER_REFERENCE IS NULL OR LTRIM(RTRIM(CUSTOMER_REFERENCE)) = '') AND STATUS_FLAG != 'L';
+		WHERE (CUSTOMER_REFERENCE IS NULL OR LTRIM(RTRIM(CUSTOMER_REFERENCE)) = '') AND STATUS_FLAG NOT IN ('L', 'P');
 	`
 	_, _ = db.ExecContext(ctx, rule6)
 
@@ -240,7 +240,7 @@ func (m *Manager) executeDryRunSo(ctx context.Context, db *sql.DB) (*models.DryR
 		UPDATE [FIN].[KAS_SO_LOADS]
 		SET STATUS_FLAG = 'E',
 		    RS_MESSAGE_TEXT = CASE WHEN RS_MESSAGE_TEXT = '' THEN 'Missing Order Date' ELSE RS_MESSAGE_TEXT + '; Missing Order Date' END
-		WHERE (ORDER_DATE IS NULL OR LTRIM(RTRIM(ORDER_DATE)) = '') AND STATUS_FLAG != 'L';
+		WHERE (ORDER_DATE IS NULL OR LTRIM(RTRIM(ORDER_DATE)) = '') AND STATUS_FLAG NOT IN ('L', 'P');
 	`
 	_, _ = db.ExecContext(ctx, rule7)
 
@@ -249,7 +249,7 @@ func (m *Manager) executeDryRunSo(ctx context.Context, db *sql.DB) (*models.DryR
 		UPDATE [FIN].[KAS_SO_LOADS]
 		SET STATUS_FLAG = 'E',
 		    RS_MESSAGE_TEXT = CASE WHEN RS_MESSAGE_TEXT = '' THEN 'Missing Delivery Date' ELSE RS_MESSAGE_TEXT + '; Missing Delivery Date' END
-		WHERE (SYS_DELIVERY_DATE IS NULL OR LTRIM(RTRIM(SYS_DELIVERY_DATE)) = '') AND STATUS_FLAG != 'L';
+		WHERE (SYS_DELIVERY_DATE IS NULL OR LTRIM(RTRIM(SYS_DELIVERY_DATE)) = '') AND STATUS_FLAG NOT IN ('L', 'P');
 	`
 	_, _ = db.ExecContext(ctx, rule8)
 
@@ -261,7 +261,7 @@ func (m *Manager) executeDryRunSo(ctx context.Context, db *sql.DB) (*models.DryR
 			SET STATUS_FLAG = 'E',
 			    RS_MESSAGE_TEXT = CASE WHEN RS_MESSAGE_TEXT = '' THEN 'Customer does not exist in Ross ERP' ELSE RS_MESSAGE_TEXT + '; Customer does not exist in Ross ERP' END
 			FROM [FIN].[KAS_SO_LOADS] t
-			WHERE STATUS_FLAG != 'L'
+			WHERE STATUS_FLAG NOT IN ('L', 'P')
 			  AND NOT EXISTS (SELECT 1 FROM CUSTOMER c WHERE c.CUSTOMER = t.CUSTOMER_NUMBER);
 		END
 	`
@@ -272,7 +272,7 @@ func (m *Manager) executeDryRunSo(ctx context.Context, db *sql.DB) (*models.DryR
 			COUNT(*) AS total,
 			ISNULL(SUM(CASE WHEN STATUS_FLAG = 'V' THEN 1 ELSE 0 END), 0) AS valid,
 			ISNULL(SUM(CASE WHEN STATUS_FLAG = 'E' THEN 1 ELSE 0 END), 0) AS errors,
-			ISNULL(SUM(CASE WHEN STATUS_FLAG = 'L' THEN 1 ELSE 0 END), 0) AS loaded,
+			ISNULL(SUM(CASE WHEN STATUS_FLAG IN ('L', 'P') THEN 1 ELSE 0 END), 0) AS loaded,
 			ISNULL(SUM(CASE WHEN STATUS_FLAG = ' ' THEN 1 ELSE 0 END), 0) AS pending
 		FROM [FIN].[KAS_SO_LOADS]
 	`
@@ -310,7 +310,7 @@ func (m *Manager) ExecuteLoader(ctx context.Context, domain string, scriptConten
 		}
 
 		var loadedCount int
-		_ = db.QueryRowContext(ctx, fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE STATUS_FLAG = 'L'", tableName)).Scan(&loadedCount)
+		_ = db.QueryRowContext(ctx, fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE STATUS_FLAG IN ('L', 'P')", tableName)).Scan(&loadedCount)
 
 		return &models.LoaderResult{
 			Success: true,
@@ -330,7 +330,7 @@ func (m *Manager) ExecuteLoader(ctx context.Context, domain string, scriptConten
 func (m *Manager) executeLoaderDc(ctx context.Context, db *sql.DB, batchID string) (*models.LoaderResult, error) {
 	query := `
 		UPDATE [FIN].[KAS_DC_LOADS]
-		SET STATUS_FLAG = 'L',
+		SET STATUS_FLAG = 'P',
 		    BATCH_ID = @p1,
 		    RS_MESSAGE_TEXT = 'Loaded into Ross ERP via Data Capture Loader'
 		WHERE STATUS_FLAG = 'V';
@@ -381,7 +381,7 @@ func (m *Manager) executeLoaderSo(ctx context.Context, db *sql.DB, batchID strin
 		generatedOrderNum := fmt.Sprintf("SO-%s-%05d", time.Now().Format("060102"), orderBase+i)
 		updQuery := `
 			UPDATE [FIN].[KAS_SO_LOADS]
-			SET STATUS_FLAG = 'L',
+			SET STATUS_FLAG = 'P',
 			    BATCH_ID = @p1,
 			    ORDER_NUMBER = @p2,
 			    RS_MESSAGE_TEXT = 'Loaded into Ross ERP SOP'
