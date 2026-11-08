@@ -305,6 +305,10 @@ func (m *Manager) ExecuteLoader(ctx context.Context, domain string, scriptConten
 
 	trimmedScript := strings.TrimSpace(scriptContent)
 	if trimmedScript != "" {
+		// Snapshot 'V' count before script runs — this is what we expect to be committed
+		var preValidCount int
+		_ = db.QueryRowContext(ctx, fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE STATUS_FLAG = 'V'", tableName)).Scan(&preValidCount)
+
 		if err := m.ExecuteSqlBatches(ctx, trimmedScript); err != nil {
 			// Stamp all remaining 'V' rows as 'F' (load failed)
 			failed := stampFailedRows(ctx, db, tableName, batchID)
@@ -317,15 +321,34 @@ func (m *Manager) ExecuteLoader(ctx context.Context, domain string, scriptConten
 			}, nil
 		}
 
+		// Count rows that were committed by the script (any STATUS_FLAG IN ('L','P')).
+		// We do NOT filter by BATCH_ID here because the SQL script manages its own @BatchID
+		// variable internally — the Go-generated batchID is not written by the script.
+		var loadedCount int
+		_ = db.QueryRowContext(ctx, fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE STATUS_FLAG IN ('L', 'P')", tableName)).Scan(&loadedCount)
+
 		// Stamp any 'V' rows the custom script didn't process as 'F'
 		failed := stampFailedRows(ctx, db, tableName, batchID)
 
-		var loadedCount int
-		_ = db.QueryRowContext(ctx, fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE STATUS_FLAG IN ('L', 'P')\n\t\t\tAND BATCH_ID = @p1", tableName), batchID).Scan(&loadedCount)
+		// If the script used RETURN (e.g. no-records path) loadedCount may be pre-existing committed rows.
+		// Use the pre-snapshot to determine what was actually committed this run.
+		committedThisRun := preValidCount - failed // rows that were 'V' and are now neither 'V' nor 'F'
+		if committedThisRun < 0 {
+			committedThisRun = 0
+		}
+		// Use the direct count if it is consistent, otherwise fall back to delta
+		if loadedCount == 0 && committedThisRun == 0 {
+			committedThisRun = 0
+		} else if committedThisRun > 0 && loadedCount >= committedThisRun {
+			// loadedCount includes previously committed rows; use the delta
+			loadedCount = committedThisRun
+		}
 
-		msg := fmt.Sprintf("Loader script executed: %d records committed into Ross ERP (Batch: %s).", loadedCount, batchID)
-		if failed > 0 {
-			msg = fmt.Sprintf("Loader script executed: %d committed, %d marked as Load Failed (Batch: %s).", loadedCount, failed, batchID)
+		msg := fmt.Sprintf("Loader script executed: %d records committed into Ross ERP.", loadedCount)
+		if preValidCount == 0 {
+			msg = "No records with STATUS_FLAG = 'V' were found. Run Dry Run validation first."
+		} else if failed > 0 {
+			msg = fmt.Sprintf("Loader script executed: %d committed, %d marked as Load Failed.", loadedCount, failed)
 		}
 
 		return &models.LoaderResult{

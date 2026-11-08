@@ -42,3 +42,4 @@ if (Test-Path "build\bin\dc-loader-wails.exe") {
     Copy-Item "build\bin\dc-loader-wails.exe" "build\bin\Ross DC Loader.exe" -Force
     Write-Host "Build complete: build\bin\Ross DC Loader.exe" -ForegroundColor Green
 }
+

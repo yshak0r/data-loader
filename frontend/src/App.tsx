@@ -185,6 +185,24 @@ export const App: React.FC = () => {
     };
   }, []);
 
+  // Listen for counts-updated events emitted by Go after dry run / loader execution.
+  // This ensures all count stats (sidebar, dashboard, ribbons) refresh immediately
+  // regardless of which view is currently active, without requiring a user action.
+  useEffect(() => {
+    const cancelCounts = EventsOn('dcload:countsUpdated', () => {
+      // Re-fetch counts from SQL Server in-place (preserves current page/filter/search)
+      refreshGridData(currentPage, pageSize, statusFilter, searchQuery);
+    });
+
+    return () => {
+      if (cancelCounts) {
+        cancelCounts();
+      } else {
+        EventsOff('dcload:countsUpdated');
+      }
+    };
+  }, [currentPage, pageSize, statusFilter, searchQuery, domain]);
+
   // Open native file dialog and stream CSV directly into the active staging table
   const handleOpenFilePicker = async () => {
     if (!dbConnected) {

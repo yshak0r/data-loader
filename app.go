@@ -145,12 +145,18 @@ func (a *App) UploadCsv(filePath string, companyCode string, division string, do
 
 func (a *App) ExecuteDryRun(domain string) (*models.DryRunResult, error) {
 	script := a.scriptsMgr.GetScriptContent(domain, scripts.SlotDryRun)
-	return a.dbManager.ExecuteDryRun(a.ctx, domain, script)
+	res, err := a.dbManager.ExecuteDryRun(a.ctx, domain, script)
+	// Notify frontend so counts refresh immediately regardless of which view is active
+	runtime.EventsEmit(a.ctx, "dcload:countsUpdated", map[string]string{"domain": domain, "op": "dryrun"})
+	return res, err
 }
 
 func (a *App) ExecuteLoader(domain string) (*models.LoaderResult, error) {
 	script := a.scriptsMgr.GetScriptContent(domain, scripts.SlotLoader)
-	return a.dbManager.ExecuteLoader(a.ctx, domain, script)
+	res, err := a.dbManager.ExecuteLoader(a.ctx, domain, script)
+	// Notify frontend so counts refresh immediately regardless of which view is active
+	runtime.EventsEmit(a.ctx, "dcload:countsUpdated", map[string]string{"domain": domain, "op": "loader"})
+	return res, err
 }
 
 func (a *App) QueryGrid(params models.GridQueryParams) (*models.GridQueryResult, error) {

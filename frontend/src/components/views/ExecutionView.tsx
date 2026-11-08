@@ -162,7 +162,7 @@ export const ExecutionView: React.FC<ExecutionViewProps> = ({
     }
 
     if (counts.total === 0) {
-      addLog('warn', 'No records found in [FIN].[KAS_DC_LOADS]. Please upload a CSV file to stage records first.');
+      addLog('warn', `No records found in ${tableName}. Please upload a CSV file to stage records first.`);
       return;
     }
 
@@ -253,12 +253,18 @@ export const ExecutionView: React.FC<ExecutionViewProps> = ({
         if (res.success) {
           if (res.loaded > 0) {
             addLog('success', `Transaction committed! Batch ID: [${res.batchId}].`);
-            addLog('success', `${res.loaded} records loaded into Ross ERP.`);
+            addLog('success', `${res.loaded} record${res.loaded === 1 ? '' : 's'} successfully loaded into Ross ERP.`);
+          } else if (res.message && (res.message.toLowerCase().includes('no verified') || res.message.toLowerCase().includes('no records'))) {
+            // No 'V' rows were ready
+            addLog('warn', `Loader skipped: ${res.message}`);
+            addLog('warn', `Ensure Dry Run validation has been run first and there are records with STATUS_FLAG = 'V'.`);
           } else {
-            addLog('warn', `${res.message}`);
+            // success=true but loaded=0 — count not captured (script-managed batch ID)
+            addLog('warn', `Loader completed. Backend: ${res.message}`);
+            addLog('info', `Check the grid for STATUS_FLAG = 'P' or 'L' rows to confirm the ERP commit.`);
           }
           if (res.failed > 0) {
-            addLog('warn', `${res.failed} records failed to load or remain uncommitted (STATUS_FLAG != 'P'/'L').`);
+            addLog('warn', `${res.failed} record${res.failed === 1 ? '' : 's'} failed to load — stamped as STATUS_FLAG = 'F'. Check the grid for details.`);
           }
 
           setLastLoaderResult({ loaded: res.loaded, failed: res.failed ?? 0, batchId: res.batchId });
