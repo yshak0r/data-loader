@@ -463,9 +463,6 @@ func uploadDcCsv(
 		}
 
 		parentLpn := getField(row, headerMap, -1, "DCPARENTLICENSEPLATEID", "DC_PARENT_LICENSE_PLATE_ID", "PARENTLPNNUMBER", "PARENT_LPN_NUMBER", "PARENTLPNID", "PARENT_LPN_ID", "PARENTLPN", "PARENT_LPN")
-		if parentLpn == "" {
-			parentLpn = lpn
-		}
 		if len(parentLpn) > 30 {
 			parentLpn = parentLpn[:30]
 		}

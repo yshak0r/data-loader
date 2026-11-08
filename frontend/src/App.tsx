@@ -3,7 +3,6 @@ import { TitleBar } from '@/components/layout/TitleBar';
 import { NavigationSidebar, NavTab } from '@/components/layout/NavigationSidebar';
 import { DashboardView } from '@/components/views/DashboardView';
 import { ImportAndGridView } from '@/components/views/ImportAndGridView';
-import { LpnHierarchyView } from '@/components/views/LpnHierarchyView';
 import { OrderGroupingView } from '@/components/views/OrderGroupingView';
 import { ExecutionView } from '@/components/views/ExecutionView';
 import { DocumentationView } from '@/components/views/DocumentationView';
@@ -394,6 +393,9 @@ export const App: React.FC = () => {
         division={dbConfig.division || '1'}
         onDomainChange={(d) => {
           setDomain(d);
+          if (currentTab === 'lpns' && d === 'inventory') {
+            setCurrentTab('importer');
+          }
           setGridRows([]);
           setTotalRows(0);
           setCounts({ total: 0, valid: 0, error: 0, loaded: 0, failed: 0 });
@@ -503,10 +505,6 @@ export const App: React.FC = () => {
               onOpenDbConfig={() => setIsDbConfigOpen(true)}
               onOpenClearStagedDialog={() => setIsClearStagedDialogOpen(true)}
             />
-          )}
-
-          {currentTab === 'lpns' && domain === 'inventory' && (
-            <LpnHierarchyView lpnGroups={[]} />
           )}
 
           {currentTab === 'lpns' && domain === 'sales_orders' && (

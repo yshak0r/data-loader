@@ -89,4 +89,10 @@ func TestGetFieldAliases(t *testing.T) {
 	if dateParsed == nil || *dateParsed != "2027-07-15" {
 		t.Errorf("expected dateParsed to be 2027-07-15, got %v", dateParsed)
 	}
+
+	// Verify PARENT LPN is empty when not provided in CSV
+	parentLpn := getField(row, hMap, -1, "DCPARENTLICENSEPLATEID", "DC_PARENT_LICENSE_PLATE_ID", "PARENTLPNNUMBER", "PARENT_LPN_NUMBER", "PARENTLPNID", "PARENT_LPN_ID", "PARENTLPN", "PARENT_LPN")
+	if parentLpn != "" {
+		t.Errorf("expected parent LPN to be empty string when omitted from CSV, got %q", parentLpn)
+	}
 }

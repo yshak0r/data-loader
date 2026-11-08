@@ -357,10 +357,10 @@ export const DocumentationView: React.FC = () => {
                 </div>
                 <div className="p-3 rounded-lg bg-secondary/30 border border-border space-y-1">
                   <span className="font-semibold text-foreground flex items-center gap-1.5">
-                    <Boxes className="w-3.5 h-3.5 text-muted-foreground" /> Hierarchy Tree View
+                    <Boxes className="w-3.5 h-3.5 text-muted-foreground" /> Order Grouping & Hierarchy
                   </span>
                   <p className="text-[11px]">
-                    Switch to <strong>LPN Tree Inspector</strong> (Inventory) or <strong>Order Hierarchy</strong> (Sales Orders) to inspect pallet groupings, line items, and totals visually.
+                    Switch to <strong>Order Hierarchy</strong> when working in Sales Orders to inspect consolidated customer headers, detail line items, and totals visually.
                   </p>
                 </div>
               </CardContent>
@@ -558,8 +558,8 @@ export const DocumentationView: React.FC = () => {
                     <h5 className="font-semibold text-foreground text-xs uppercase tracking-wide">Key Capabilities:</h5>
                     <div className="p-3 rounded-lg bg-secondary/30 border border-border space-y-2">
                       <div>
-                        <strong className="text-foreground block">License Plate Numbers (LPN Tree):</strong>
-                        <span>Groups inventory by Pallet/LPN identifiers. Inspect multi-item pallets in the dedicated <strong>LPN Tree Inspector</strong> view.</span>
+                        <strong className="text-foreground block">License Plate Numbers (LPN Tracking):</strong>
+                        <span>Maintains unique Pallet/LPN identifiers per warehouse and bin, with full line numbering and batch integrity.</span>
                       </div>
                       <div>
                         <strong className="text-foreground block">Catchweight & Dual UOM:</strong>

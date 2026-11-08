@@ -59,46 +59,50 @@ export const NavigationSidebar: React.FC<NavigationSidebarProps> = ({
     badge?: string | number;
     badgeVariant?: 'destructive' | 'secondary' | 'outline';
   }> = [
-    {
-      id: 'dashboard',
-      label: 'Overview & Metrics',
-      icon: LayoutDashboard,
-    },
-    {
-      id: 'importer',
-      label: domain === 'sales_orders' ? 'Orders Grid & Staging' : 'Data Grid & Import',
-      icon: FileSpreadsheet,
-      badge: totalRows > 0 ? totalRows : undefined,
-      badgeVariant: 'secondary',
-    },
-    {
-      id: 'errors',
-      label: 'Error Inspector',
-      icon: AlertTriangle,
-      badge: errorCount > 0 ? errorCount : undefined,
-      badgeVariant: errorCount > 0 ? 'destructive' : undefined,
-    },
-    {
-      id: 'lpns',
-      label: domain === 'sales_orders' ? 'Order Hierarchy' : 'LPN Tree Inspector',
-      icon: domain === 'sales_orders' ? ShoppingCart : Boxes,
-    },
-    {
-      id: 'execution',
-      label: 'Simulate & Load',
-      icon: PlayCircle,
-    },
-    {
-      id: 'scripts',
-      label: 'SQL Scripts Config',
-      icon: Settings,
-    },
-    {
-      id: 'docs',
-      label: 'Documentation & Guide',
-      icon: BookOpen,
-    },
-  ];
+      {
+        id: 'dashboard',
+        label: 'Overview & Metrics',
+        icon: LayoutDashboard,
+      },
+      {
+        id: 'importer',
+        label: domain === 'sales_orders' ? 'Orders Grid & Staging' : 'Data Grid & Import',
+        icon: FileSpreadsheet,
+        badge: totalRows > 0 ? totalRows : undefined,
+        badgeVariant: 'secondary',
+      },
+      {
+        id: 'errors',
+        label: 'Error Inspector',
+        icon: AlertTriangle,
+        badge: errorCount > 0 ? errorCount : undefined,
+        badgeVariant: errorCount > 0 ? 'destructive' : undefined,
+      },
+      ...(domain === 'sales_orders'
+        ? [
+          {
+            id: 'lpns' as NavTab,
+            label: 'Order Hierarchy',
+            icon: ShoppingCart,
+          },
+        ]
+        : []),
+      {
+        id: 'execution',
+        label: 'Simulate & Load',
+        icon: PlayCircle,
+      },
+      {
+        id: 'scripts',
+        label: 'SQL Scripts Config',
+        icon: Settings,
+      },
+      {
+        id: 'docs',
+        label: 'Documentation & Guide',
+        icon: BookOpen,
+      },
+    ];
 
   return (
     <aside className="w-64 bg-card border-r border-border flex flex-col justify-between p-3 select-none">
@@ -122,17 +126,15 @@ export const NavigationSidebar: React.FC<NavigationSidebarProps> = ({
               <button
                 key={item.id}
                 onClick={() => onSelectTab(item.id)}
-                className={`w-full flex items-center justify-between px-3 py-2 rounded-md text-xs font-medium transition-all cursor-pointer ${
-                  isActive
+                className={`w-full flex items-center justify-between px-3 py-2 rounded-md text-xs font-medium transition-all cursor-pointer ${isActive
                     ? 'bg-secondary text-foreground border border-border shadow-sm'
                     : 'text-muted-foreground hover:text-foreground hover:bg-secondary/50 border border-transparent'
-                }`}
+                  }`}
               >
                 <div className="flex items-center gap-2.5">
                   <Icon
-                    className={`w-4 h-4 ${
-                      isActive ? 'text-foreground' : 'text-muted-foreground'
-                    }`}
+                    className={`w-4 h-4 ${isActive ? 'text-foreground' : 'text-muted-foreground'
+                      }`}
                   />
                   <span>{item.label}</span>
                 </div>
@@ -177,20 +179,18 @@ export const NavigationSidebar: React.FC<NavigationSidebarProps> = ({
         >
           <div className="flex items-center gap-2">
             <div
-              className={`w-7 h-7 rounded-md flex items-center justify-center border ${
-                dbConnected
+              className={`w-7 h-7 rounded-md flex items-center justify-center border ${dbConnected
                   ? 'bg-secondary text-foreground border-border'
                   : 'bg-rose-500/10 text-rose-700 dark:text-rose-400 border-rose-500/20'
-              }`}
+                }`}
             >
               <Database className="w-3.5 h-3.5" />
             </div>
             <div>
               <div className="flex items-center gap-1.5">
                 <span
-                  className={`w-1.5 h-1.5 rounded-full ${
-                    dbConnected ? 'bg-emerald-500' : 'bg-rose-500 animate-pulse'
-                  }`}
+                  className={`w-1.5 h-1.5 rounded-full ${dbConnected ? 'bg-emerald-500' : 'bg-rose-500 animate-pulse'
+                    }`}
                 />
                 <p className="text-[11px] font-medium text-foreground">
                   {dbConnected ? 'SQL Server' : 'SQL Disconnected'}
@@ -203,9 +203,8 @@ export const NavigationSidebar: React.FC<NavigationSidebarProps> = ({
           </div>
           <div className="flex items-center gap-1.5">
             <span
-              className={`text-[10px] font-mono font-medium ${
-                dbConnected ? 'text-emerald-700 dark:text-emerald-400' : 'text-rose-700 dark:text-rose-400 underline'
-              }`}
+              className={`text-[10px] font-mono font-medium ${dbConnected ? 'text-emerald-700 dark:text-emerald-400' : 'text-rose-700 dark:text-rose-400 underline'
+                }`}
             >
               {dbConnected ? 'ONLINE' : 'CONNECT'}
             </span>
