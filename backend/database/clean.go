@@ -78,14 +78,20 @@ func splitStatements(batch string) []string {
 	return stmts
 }
 
-// GetCleanWarehousesPreview retrieves target warehouses and company codes from staged data.
-func (m *Manager) GetCleanWarehousesPreview(ctx context.Context) (*models.CleanPreview, error) {
+// GetCleanPreview retrieves target warehouses, company codes, and eligible record count from staged data.
+func (m *Manager) GetCleanPreview(ctx context.Context, domain string) (*models.CleanPreview, error) {
 	db, _, err := m.GetDB()
 	if err != nil {
 		return nil, err
 	}
 
-	whQuery := `SELECT DISTINCT WAREHOUSE FROM [FIN].[KAS_DC_LOADS] WHERE WAREHOUSE IS NOT NULL AND LTRIM(RTRIM(WAREHOUSE)) != ''`
+	tableName := "[FIN].[KAS_DC_LOADS]"
+	isSO := domain == "sales_orders"
+	if isSO {
+		tableName = "[FIN].[KAS_SO_LOADS]"
+	}
+
+	whQuery := fmt.Sprintf(`SELECT DISTINCT WAREHOUSE FROM %s WHERE WAREHOUSE IS NOT NULL AND LTRIM(RTRIM(WAREHOUSE)) != ''`, tableName)
 	rows, err := db.QueryContext(ctx, whQuery)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query warehouses: %w", err)
@@ -101,7 +107,7 @@ func (m *Manager) GetCleanWarehousesPreview(ctx context.Context) (*models.CleanP
 	}
 	rows.Close()
 
-	coQuery := `SELECT DISTINCT COMPANY_CODE FROM [FIN].[KAS_DC_LOADS] WHERE COMPANY_CODE IS NOT NULL AND LTRIM(RTRIM(COMPANY_CODE)) != ''`
+	coQuery := fmt.Sprintf(`SELECT DISTINCT COMPANY_CODE FROM %s WHERE COMPANY_CODE IS NOT NULL AND LTRIM(RTRIM(COMPANY_CODE)) != ''`, tableName)
 	coRows, err := db.QueryContext(ctx, coQuery)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query companies: %w", err)
@@ -116,9 +122,18 @@ func (m *Manager) GetCleanWarehousesPreview(ctx context.Context) (*models.CleanP
 		}
 	}
 
-	countQuery := `SELECT COUNT(*) FROM [FIN].[KAS_DC_LOADS]`
 	var totalRecords int
-	_ = db.QueryRowContext(ctx, countQuery).Scan(&totalRecords)
+	if isSO {
+		// In Sales Orders, scope to clean is loaded orders (STATUS_FLAG = 'P' with ORDER_NUMBER)
+		soCountQuery := `SELECT COUNT(*) FROM [FIN].[KAS_SO_LOADS] WHERE STATUS_FLAG = 'P' AND ORDER_NUMBER IS NOT NULL`
+		_ = db.QueryRowContext(ctx, soCountQuery).Scan(&totalRecords)
+		if totalRecords == 0 {
+			_ = db.QueryRowContext(ctx, `SELECT COUNT(*) FROM [FIN].[KAS_SO_LOADS]`).Scan(&totalRecords)
+		}
+	} else {
+		countQuery := `SELECT COUNT(*) FROM [FIN].[KAS_DC_LOADS]`
+		_ = db.QueryRowContext(ctx, countQuery).Scan(&totalRecords)
+	}
 
 	return &models.CleanPreview{
 		Warehouses:   warehouses,
@@ -127,32 +142,51 @@ func (m *Manager) GetCleanWarehousesPreview(ctx context.Context) (*models.CleanP
 	}, nil
 }
 
-// CleanInventoryTables is a backward-compatible wrapper calling CleanInventoryTablesWithScript with empty string.
-func (m *Manager) CleanInventoryTables(ctx context.Context) (*models.CleanTableResult, error) {
-	return m.CleanInventoryTablesWithScript(ctx, "")
+// GetCleanWarehousesPreview retrieves target warehouses and company codes from staged data (backward compatible).
+func (m *Manager) GetCleanWarehousesPreview(ctx context.Context) (*models.CleanPreview, error) {
+	return m.GetCleanPreview(ctx, "inventory")
 }
 
-// CleanInventoryTablesWithScript executes the provided SQL clean script inside an isolated transaction.
-// It executes statements sequentially, captures rows affected per table, and returns an ordered breakdown.
-// Also supports scripts that output summary recordsets with table_name / rows_deleted columns.
+// CleanInventoryTables is a backward-compatible wrapper calling CleanTablesWithScript for inventory.
+func (m *Manager) CleanInventoryTables(ctx context.Context) (*models.CleanTableResult, error) {
+	return m.CleanTablesWithScript(ctx, "inventory", "")
+}
+
+// CleanInventoryTablesWithScript executes the provided SQL clean script inside an isolated transaction for inventory.
 func (m *Manager) CleanInventoryTablesWithScript(ctx context.Context, script string) (*models.CleanTableResult, error) {
+	return m.CleanTablesWithScript(ctx, "inventory", script)
+}
+
+// CleanTablesWithScript executes the clean script inside an isolated transaction for the given domain.
+func (m *Manager) CleanTablesWithScript(ctx context.Context, domain string, script string) (*models.CleanTableResult, error) {
 	db, _, err := m.GetDB()
 	if err != nil {
 		return nil, err
 	}
 
-	preview, err := m.GetCleanWarehousesPreview(ctx)
+	isSO := domain == "sales_orders"
+	preview, err := m.GetCleanPreview(ctx, domain)
 	if err != nil {
 		return nil, err
 	}
 
-	if len(preview.Warehouses) == 0 {
+	if !isSO && len(preview.Warehouses) == 0 {
 		return &models.CleanTableResult{
 			Success:          false,
 			TotalDeleted:     0,
 			TableBreakdown:   []models.CleanBreakdownItem{},
 			TargetWarehouses: []string{},
 			Message:          "No staged warehouses found. Please upload a CSV before cleaning inventory tables.",
+		}, nil
+	}
+
+	if isSO && preview.RecordCount == 0 {
+		return &models.CleanTableResult{
+			Success:          false,
+			TotalDeleted:     0,
+			TableBreakdown:   []models.CleanBreakdownItem{},
+			TargetWarehouses: []string{},
+			Message:          "No staged sales orders found in [FIN].[KAS_SO_LOADS]. Nothing to clean.",
 		}, nil
 	}
 
@@ -317,14 +351,22 @@ func (m *Manager) CleanInventoryTablesWithScript(ctx context.Context, script str
 		}
 	}
 
+	msg := fmt.Sprintf(
+		"Clean completed: %d total record(s) removed across %d table(s) for warehouse(s): %s.",
+		totalDeleted, affectedCount, strings.Join(preview.Warehouses, ", "),
+	)
+	if isSO {
+		msg = fmt.Sprintf(
+			"Clean completed: %d total sales order record(s) removed across %d table(s).",
+			totalDeleted, affectedCount,
+		)
+	}
+
 	return &models.CleanTableResult{
 		Success:          true,
 		TotalDeleted:     totalDeleted,
 		TableBreakdown:   breakdown,
 		TargetWarehouses: preview.Warehouses,
-		Message: fmt.Sprintf(
-			"Clean completed: %d total record(s) removed across %d table(s) for warehouse(s): %s.",
-			totalDeleted, affectedCount, strings.Join(preview.Warehouses, ", "),
-		),
+		Message:          msg,
 	}, nil
 }

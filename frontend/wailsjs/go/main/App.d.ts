@@ -7,6 +7,8 @@ export function ActivateLicense(arg1:string):Promise<models.ActivateResult>;
 
 export function CleanInventoryTables():Promise<models.CleanTableResult>;
 
+export function CleanSalesTables():Promise<models.CleanTableResult>;
+
 export function ClearAllSqlScripts(arg1:string):Promise<Record<scripts.ScriptSlot, scripts.ScriptSlotInfo>>;
 
 export function ClearStagedData(arg1:string):Promise<models.ClearResult>;
@@ -27,7 +29,7 @@ export function ExportData(arg1:string,arg2:string):Promise<string>;
 
 export function GetAllSqlScripts(arg1:string):Promise<Record<scripts.ScriptSlot, scripts.ScriptSlotInfo>>;
 
-export function GetCleanPreview():Promise<models.CleanPreview>;
+export function GetCleanPreview(arg1:string):Promise<models.CleanPreview>;
 
 export function GetDatabaseStatus():Promise<models.ConnectionStatus>;
 

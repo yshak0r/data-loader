@@ -580,16 +580,20 @@ export const App: React.FC = () => {
         onDisconnect={handleDisconnect}
       />
 
-      {/* Clean Inventory Tables Modal */}
+      {/* Clean Tables Modal */}
       <CleanDatabaseDialog
         open={isCleanDialogOpen}
         onOpenChange={setIsCleanDialogOpen}
+        domain={domain}
         dbConnected={dbConnected}
         dbHost={dbConfig.host}
         dbDatabase={dbConfig.database}
         onCleanComplete={async () => {
           await refreshGridData();
-          setLastStagedInfo('Inventory tables cleaned successfully.');
+          const msg = domain === 'sales_orders'
+            ? 'Sales order tables cleaned successfully.'
+            : 'Inventory tables cleaned successfully.';
+          setLastStagedInfo(msg);
         }}
       />
 

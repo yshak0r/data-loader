@@ -225,9 +225,11 @@ class DbClient {
     }
   }
 
-  public async cleanTables(): Promise<CleanTableResult> {
+  public async cleanTables(domain: LoaderDomain = 'inventory'): Promise<CleanTableResult> {
     try {
-      const res = await App.CleanInventoryTables();
+      const res = domain === 'sales_orders'
+        ? await App.CleanSalesTables()
+        : await App.CleanInventoryTables();
       return {
         success: res.success,
         totalDeleted: res.totalDeleted,
@@ -246,9 +248,9 @@ class DbClient {
     }
   }
 
-  public async getCleanPreview(): Promise<CleanPreview> {
+  public async getCleanPreview(domain: LoaderDomain = 'inventory'): Promise<CleanPreview> {
     try {
-      const res = await App.GetCleanPreview();
+      const res = await App.GetCleanPreview(domain);
       return {
         warehouses: res.warehouses || [],
         companyCodes: res.companyCodes || [],

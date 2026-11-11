@@ -10,6 +10,10 @@ export function CleanInventoryTables() {
   return window['go']['main']['App']['CleanInventoryTables']();
 }
 
+export function CleanSalesTables() {
+  return window['go']['main']['App']['CleanSalesTables']();
+}
+
 export function ClearAllSqlScripts(arg1) {
   return window['go']['main']['App']['ClearAllSqlScripts'](arg1);
 }
@@ -50,8 +54,8 @@ export function GetAllSqlScripts(arg1) {
   return window['go']['main']['App']['GetAllSqlScripts'](arg1);
 }
 
-export function GetCleanPreview() {
-  return window['go']['main']['App']['GetCleanPreview']();
+export function GetCleanPreview(arg1) {
+  return window['go']['main']['App']['GetCleanPreview'](arg1);
 }
 
 export function GetDatabaseStatus() {

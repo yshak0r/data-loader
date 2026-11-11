@@ -172,8 +172,16 @@ func (a *App) CleanInventoryTables() (*models.CleanTableResult, error) {
 	return a.dbManager.CleanInventoryTablesWithScript(a.ctx, script)
 }
 
-func (a *App) GetCleanPreview() (*models.CleanPreview, error) {
-	return a.dbManager.GetCleanWarehousesPreview(a.ctx)
+func (a *App) CleanSalesTables() (*models.CleanTableResult, error) {
+	script := a.scriptsMgr.GetScriptContent("sales_orders", scripts.SlotCleanTables)
+	return a.dbManager.CleanTablesWithScript(a.ctx, "sales_orders", script)
+}
+
+func (a *App) GetCleanPreview(domain string) (*models.CleanPreview, error) {
+	if domain == "" {
+		domain = "inventory"
+	}
+	return a.dbManager.GetCleanPreview(a.ctx, domain)
 }
 
 // Native File Dialogs

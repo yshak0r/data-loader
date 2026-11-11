@@ -25,11 +25,12 @@ import { Button } from '../ui/button';
 import { Badge } from '../ui/badge';
 import { Input } from '../ui/input';
 import { dbClient } from '../../lib/dbClient';
-import { CleanTableResult, CleanPreview, SqlScriptInfo } from '../../types/dcloader';
+import { CleanTableResult, CleanPreview, SqlScriptInfo, LoaderDomain } from '../../types/dcloader';
 
 interface CleanDatabaseDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  domain?: LoaderDomain;
   dbConnected: boolean;
   dbHost: string;
   dbDatabase: string;
@@ -39,11 +40,13 @@ interface CleanDatabaseDialogProps {
 export const CleanDatabaseDialog: React.FC<CleanDatabaseDialogProps> = ({
   open,
   onOpenChange,
+  domain = 'inventory',
   dbConnected,
   dbHost,
   dbDatabase,
   onCleanComplete,
 }) => {
+  const isSO = domain === 'sales_orders';
   const [isLoadingPreview, setIsLoadingPreview] = useState(false);
   const [isCleaning, setIsCleaning] = useState(false);
   const [preview, setPreview] = useState<CleanPreview>({
@@ -57,7 +60,7 @@ export const CleanDatabaseDialog: React.FC<CleanDatabaseDialogProps> = ({
 
   const fetchCleanScript = async () => {
     try {
-      const all = await dbClient.getAllSqlScripts();
+      const all = await dbClient.getAllSqlScripts(domain);
       if (all && all.clean_tables) {
         setCleanScript(all.clean_tables);
       }
@@ -68,20 +71,25 @@ export const CleanDatabaseDialog: React.FC<CleanDatabaseDialogProps> = ({
     try {
       const res = await dbClient.openSqlFile();
       if (!res.canceled && res.fileContent && res.fileName) {
-        const updated = await dbClient.setSqlScript('clean_tables', {
-          name: res.fileName,
-          content: res.fileContent,
-          filePath: res.filePath,
-        });
+        const updated = await dbClient.setSqlScript(
+          'clean_tables',
+          {
+            name: res.fileName,
+            content: res.fileContent,
+            filePath: res.filePath,
+          },
+          domain
+        );
 
         try {
-          const stored = JSON.parse(localStorage.getItem('custom_sql_scripts') || '{}');
+          const storageKey = `custom_sql_scripts_${domain}`;
+          const stored = JSON.parse(localStorage.getItem(storageKey) || '{}');
           stored.clean_tables = {
             name: res.fileName,
             content: res.fileContent,
             filePath: res.filePath,
           };
-          localStorage.setItem('custom_sql_scripts', JSON.stringify(stored));
+          localStorage.setItem(storageKey, JSON.stringify(stored));
         } catch (_) {}
 
         setCleanScript(updated);
@@ -91,14 +99,12 @@ export const CleanDatabaseDialog: React.FC<CleanDatabaseDialogProps> = ({
     }
   };
 
-
-
   const fetchPreview = async () => {
     if (!dbConnected) return;
     setIsLoadingPreview(true);
     setResult(null);
     try {
-      const p = await dbClient.getCleanPreview();
+      const p = await dbClient.getCleanPreview(domain);
       setPreview(p);
     } catch (err) {
       console.error('Failed to load clean preview:', err);
@@ -114,7 +120,7 @@ export const CleanDatabaseDialog: React.FC<CleanDatabaseDialogProps> = ({
       fetchPreview();
       fetchCleanScript();
     }
-  }, [open, dbConnected]);
+  }, [open, dbConnected, domain]);
 
   const handleExecuteClean = async () => {
     if (!dbConnected || confirmText.trim().toUpperCase() !== 'CLEAN') return;
@@ -133,7 +139,7 @@ export const CleanDatabaseDialog: React.FC<CleanDatabaseDialogProps> = ({
 
     setIsCleaning(true);
     try {
-      const res = await dbClient.cleanTables();
+      const res = await dbClient.cleanTables(domain);
       setResult(res);
       if (res.success) {
         await onCleanComplete();
@@ -163,9 +169,9 @@ export const CleanDatabaseDialog: React.FC<CleanDatabaseDialogProps> = ({
             </div>
             <div>
               <DialogTitle className="text-lg font-bold text-foreground flex items-center gap-2">
-                Clean Target Inventory Tables
+                {isSO ? 'Clean Sales Order Tables' : 'Clean Target Inventory Tables'}
                 <Badge variant="outline" className="text-rose-700 dark:text-rose-400 border-rose-500/30 bg-rose-500/10 text-[10px]">
-                  Warehouse Scoped
+                  {isSO ? 'Order Scoped' : 'Warehouse Scoped'}
                 </Badge>
               </DialogTitle>
               <DialogDescription className="text-xs text-muted-foreground">
@@ -183,9 +189,25 @@ export const CleanDatabaseDialog: React.FC<CleanDatabaseDialogProps> = ({
             <div className="text-xs space-y-1 text-amber-900 dark:text-amber-200">
               <p className="font-semibold text-amber-700 dark:text-amber-300">Production Safety Notice & Scope</p>
               <p className="leading-relaxed">
-                This action runs inside an isolated <strong>SQL Transaction</strong>. It deletes inventory and license plate
-                records from 10 target tables <strong>only for the warehouses</strong> present in the current staged batch
-                (<code className="bg-amber-500/20 px-1 py-0.5 rounded text-amber-800 dark:text-amber-200">KAS_DC_LOADS WHERE STATUS_FLAG &lt;&gt; &apos;E&apos;</code>).
+                {isSO ? (
+                  <>
+                    This action runs inside an isolated <strong>SQL Transaction</strong>. It deletes whole Sales Orders
+                    (headers, lines, taxes, comments, and history) created by the loader recorded on{' '}
+                    <code className="bg-amber-500/20 px-1 py-0.5 rounded text-amber-800 dark:text-amber-200">
+                      FIN.KAS_SO_LOADS WHERE STATUS_FLAG=&apos;P&apos;
+                    </code>
+                    , and resets staging rows so they can be re-validated and re-loaded.
+                  </>
+                ) : (
+                  <>
+                    This action runs inside an isolated <strong>SQL Transaction</strong>. It deletes inventory and license plate
+                    records from target tables <strong>only for the warehouses</strong> present in the current staged batch (
+                    <code className="bg-amber-500/20 px-1 py-0.5 rounded text-amber-800 dark:text-amber-200">
+                      KAS_DC_LOADS WHERE STATUS_FLAG &lt;&gt; &apos;E&apos;
+                    </code>
+                    ).
+                  </>
+                )}
               </p>
             </div>
           </div>
@@ -228,7 +250,8 @@ export const CleanDatabaseDialog: React.FC<CleanDatabaseDialogProps> = ({
           <div className="bg-background/80 border border-border rounded-lg p-3.5 space-y-2.5">
             <div className="flex items-center justify-between">
               <span className="text-xs font-semibold text-foreground flex items-center gap-1.5">
-                <Building className="w-3.5 h-3.5 text-primary" /> Target Scope (From Staged KAS_DC_LOADS)
+                <Building className="w-3.5 h-3.5 text-primary" />{' '}
+                {isSO ? 'Target Scope (From Staged KAS_SO_LOADS)' : 'Target Scope (From Staged KAS_DC_LOADS)'}
               </span>
               <Button
                 variant="ghost"
@@ -243,16 +266,20 @@ export const CleanDatabaseDialog: React.FC<CleanDatabaseDialogProps> = ({
 
             {isLoadingPreview ? (
               <div className="text-xs text-muted-foreground py-3 text-center">Loading target scope...</div>
-            ) : preview.warehouses.length > 0 ? (
+            ) : preview.recordCount > 0 || preview.warehouses.length > 0 ? (
               <div className="space-y-2">
-                <div className="flex flex-wrap items-center gap-1.5">
-                  <span className="text-[11px] text-muted-foreground mr-1">Warehouses to Clean:</span>
-                  {preview.warehouses.map((wh) => (
-                    <Badge key={wh} className="bg-primary/20 text-primary border border-primary/40 font-mono text-xs px-2">
-                      WH {wh}
-                    </Badge>
-                  ))}
-                </div>
+                {preview.warehouses.length > 0 && (
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="text-[11px] text-muted-foreground mr-1">
+                      {isSO ? 'Warehouses referenced:' : 'Warehouses to Clean:'}
+                    </span>
+                    {preview.warehouses.map((wh) => (
+                      <Badge key={wh} className="bg-primary/20 text-primary border border-primary/40 font-mono text-xs px-2">
+                        WH {wh}
+                      </Badge>
+                    ))}
+                  </div>
+                )}
                 <div className="flex items-center gap-3 text-[11px] text-muted-foreground">
                   <span>
                     Company Codes:{' '}
@@ -260,15 +287,24 @@ export const CleanDatabaseDialog: React.FC<CleanDatabaseDialogProps> = ({
                   </span>
                   <span>•</span>
                   <span>
-                    Eligible Records in Staging:{' '}
+                    {isSO ? 'Loaded Records to Clean / Reset:' : 'Eligible Records in Staging:'}{' '}
                     <strong className="text-foreground">{preview.recordCount.toLocaleString()}</strong>
                   </span>
                 </div>
               </div>
             ) : (
               <div className="text-xs text-amber-800 dark:text-amber-300 bg-amber-500/10 border border-amber-500/30 p-2.5 rounded">
-                No eligible records in <code className="font-mono">KAS_DC_LOADS</code> with <code className="font-mono">STATUS_FLAG &lt;&gt; &apos;E&apos;</code>.
-                Please import a CSV batch first to define which warehouses to clean.
+                {isSO ? (
+                  <>
+                    No loaded sales orders found in <code className="font-mono">[FIN].[KAS_SO_LOADS]</code>.
+                    Please stage and process sales orders first before cleaning.
+                  </>
+                ) : (
+                  <>
+                    No eligible records in <code className="font-mono">KAS_DC_LOADS</code> with <code className="font-mono">STATUS_FLAG &lt;&gt; &apos;E&apos;</code>.
+                    Please import a CSV batch first to define which warehouses to clean.
+                  </>
+                )}
               </div>
             )}
           </div>
@@ -280,7 +316,9 @@ export const CleanDatabaseDialog: React.FC<CleanDatabaseDialogProps> = ({
                 <TableIcon className="w-3.5 h-3.5" /> Target Tables (determined by active clean script):
               </span>
               <div className="text-[11px] text-muted-foreground bg-background/50 border border-border/60 p-2.5 rounded-lg italic">
-                Table breakdown will be shown here after execution. The scope is determined by the loaded clean script.
+                {isSO
+                  ? 'Table breakdown (SALES_ORDER_HEADERS, SALES_ORDER_LINES, SOP_LINE_DETAILS, etc.) will be shown here after execution.'
+                  : 'Table breakdown will be shown here after execution. The scope is determined by the loaded clean script.'}
               </div>
             </div>
           )}
@@ -306,7 +344,9 @@ export const CleanDatabaseDialog: React.FC<CleanDatabaseDialogProps> = ({
                   </h4>
                   <p className="text-xs text-muted-foreground mt-0.5">
                     {result.success
-                      ? 'Target inventory records have been safely cleared in a single atomic transaction.'
+                      ? (isSO
+                          ? 'Target Sales Order records have been safely cleared in a single atomic transaction, and staging rows reset.'
+                          : 'Target inventory records have been safely cleared in a single atomic transaction.')
                       : 'An error occurred during execution. No database changes were applied.'}
                   </p>
                 </div>
@@ -432,7 +472,7 @@ export const CleanDatabaseDialog: React.FC<CleanDatabaseDialogProps> = ({
                 placeholder="Type CLEAN to confirm"
                 value={confirmText}
                 onChange={(e) => setConfirmText(e.target.value)}
-                disabled={isCleaning || preview.warehouses.length === 0}
+                disabled={isCleaning || (isSO ? preview.recordCount === 0 : preview.warehouses.length === 0)}
                 className="font-mono text-xs bg-background uppercase border-rose-500/30 focus-visible:ring-rose-500"
               />
             </div>
@@ -449,13 +489,19 @@ export const CleanDatabaseDialog: React.FC<CleanDatabaseDialogProps> = ({
               variant="destructive"
               size="sm"
               onClick={handleExecuteClean}
-              disabled={!isConfirmValid || isCleaning || preview.warehouses.length === 0 || !cleanScript?.isLoaded}
+              disabled={
+                !isConfirmValid ||
+                isCleaning ||
+                (isSO ? preview.recordCount === 0 : preview.warehouses.length === 0) ||
+                !cleanScript?.isLoaded
+              }
               className="bg-rose-600 hover:bg-rose-700 text-white gap-1.5 font-medium shadow-md shadow-rose-950/50"
               title={!cleanScript?.isLoaded ? 'Please load or upload a clean script in SQL Scripts Config first' : ''}
             >
               {isCleaning ? (
                 <>
-                  <RefreshCw className="w-3.5 h-3.5 animate-spin mr-1" /> Cleaning Inventory Tables...
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin mr-1" />{' '}
+                  {isSO ? 'Cleaning Sales Order Tables...' : 'Cleaning Inventory Tables...'}
                 </>
               ) : (
                 <>
