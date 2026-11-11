@@ -78,15 +78,6 @@ export const NavigationSidebar: React.FC<NavigationSidebarProps> = ({
         badge: errorCount > 0 ? errorCount : undefined,
         badgeVariant: errorCount > 0 ? 'destructive' : undefined,
       },
-      ...(domain === 'sales_orders'
-        ? [
-          {
-            id: 'lpns' as NavTab,
-            label: 'Order Hierarchy',
-            icon: ShoppingCart,
-          },
-        ]
-        : []),
       {
         id: 'execution',
         label: 'Simulate & Load',
