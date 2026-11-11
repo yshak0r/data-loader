@@ -148,24 +148,24 @@ func uploadSoCsv(
 		}
 
 		customer := getField(row, headerMap, 1, "CUSTOMER", "CUSTOMERNUMBER", "CUSTOMER_NUMBER", "CUSTOMERCODE", "CUSTOMER_CODE", "CUSTNO", "CUST_NO", "CUST")
-		if len(customer) > 30 {
-			customer = customer[:30]
+		if len(customer) > 8 {
+			customer = customer[:8]
 		}
 		if customer == "" {
 			customer = " "
 		}
 
 		deliveryCode := getField(row, headerMap, 2, "DELIVERYCODE", "DELIVERY_CODE", "DELIVERYADDRESSCODE", "DELIVERY_ADDRESS_CODE", "SHIPTO", "SHIP_TO")
-		if len(deliveryCode) > 30 {
-			deliveryCode = deliveryCode[:30]
+		if len(deliveryCode) > 10 {
+			deliveryCode = deliveryCode[:10]
 		}
 		if deliveryCode == "" {
 			deliveryCode = "1"
 		}
 
 		custRef := getField(row, headerMap, 3, "CUSTREF", "CUST_REF", "CUSTOMERREF", "CUSTOMER_REF", "CUSTOMERREFERENCE", "CUSTOMER_REFERENCE", "PONUMBER", "PO_NUMBER", "POREF", "PO_REF", "REF")
-		if len(custRef) > 50 {
-			custRef = custRef[:50]
+		if len(custRef) > 25 {
+			custRef = custRef[:25]
 		}
 		if custRef == "" {
 			custRef = " "
@@ -178,16 +178,16 @@ func uploadSoCsv(
 		}
 
 		wh := getField(row, headerMap, 5, "WAREHOUSE", "WH", "WAREHOUSECODE", "WAREHOUSE_CODE")
-		if len(wh) > 20 {
-			wh = wh[:20]
+		if len(wh) > 2 {
+			wh = wh[:2]
 		}
 		if wh == "" {
 			wh = " "
 		}
 
 		part := getField(row, headerMap, 6, "ROSSPARTCODE", "ROSS_PART_CODE", "PARTCODE", "PART_CODE", "ITEM", "ITEMCODE", "ITEM_CODE", "PRODUCT", "PRODUCTCODE", "PART")
-		if len(part) > 50 {
-			part = part[:50]
+		if len(part) > 15 {
+			part = part[:15]
 		}
 		if part == "" {
 			part = " "
@@ -226,7 +226,7 @@ func uploadSoCsv(
 			SalesPrice:          price,
 			Freight:             freight,
 			OrderLineNumber:     lineNum,
-			StatusFlag:          " ",
+			StatusFlag:          "N",
 			RsMessageText:       "Staged in SQL Server [FIN].[KAS_SO_LOADS]",
 		}
 		records = append(records, rec)
@@ -273,7 +273,7 @@ func insertSoBatch(ctx context.Context, db *sql.DB, records []models.KasSoLoadRe
 		))
 		args = append(args,
 			r.CompanyCode, r.Division, r.OrderDate, r.CustomerNumber, r.DeliveryAddressCode,
-			r.CustomerReference, r.SysDeliveryDate, r.Warehouse, r.PartCode, r.Quantity1,
+			r.CustomerReference, r.SysDeliveryDate, r.Warehouse, r.PartCode, strconv.FormatFloat(r.Quantity1, 'f', -1, 64),
 			r.UnitSales, r.SalesPrice, r.Freight, r.OrderLineNumber, r.StatusFlag, r.RsMessageText,
 		)
 		argIdx += 16
@@ -282,7 +282,7 @@ func insertSoBatch(ctx context.Context, db *sql.DB, records []models.KasSoLoadRe
 	query := fmt.Sprintf(`
 		INSERT INTO [FIN].[KAS_SO_LOADS] (
 			COMPANY_CODE, DIVISION, ORDER_DATE, CUSTOMER_NUMBER, DELIVERY_ADDRESS_CODE,
-			CUSTOMER_REFERENCE, SYS_DELIVERY_DATE, WAREHOUSE, PART_CODE, QUANTITY_1,
+			CUSTOMER_REFERENCE, SYS_DELIVERY_DATE, WAREHOUSE, PART_CODE, QUANTITY,
 			UNIT_SALES, SALES_PRICE, FREIGHT, ORDER_LINE_NUMBER, STATUS_FLAG, RS_MESSAGE_TEXT
 		) VALUES %s
 	`, strings.Join(valStrings, ", "))

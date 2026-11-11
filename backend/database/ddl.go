@@ -226,6 +226,13 @@ BEGIN
     BEGIN CATCH
     END CATCH
 END
+GO
+ 
+EXEC sys.sp_addextendedproperty @name=N'MS_Description',
+     @value=N'Staging table for Sales Order loads from CSV - separate from KAS_DC_LOADS',
+     @level0type=N'SCHEMA', @level0name=N'FIN',
+     @level1type=N'TABLE',  @level1name=N'KAS_SO_LOADS'
+GO
 `
 
 // EnsureTableExists ensures the appropriate staging table exists idempotently.

@@ -358,6 +358,13 @@ BEGIN
     BEGIN CATCH
     END CATCH
 END
+GO
+ 
+EXEC sys.sp_addextendedproperty @name=N'MS_Description',
+     @value=N'Staging table for Sales Order loads from CSV - separate from KAS_DC_LOADS',
+     @level0type=N'SCHEMA', @level0name=N'FIN',
+     @level1type=N'TABLE',  @level1name=N'KAS_SO_LOADS'
+GO
 `
 
 const DefaultSoDryRunSQL = `
@@ -390,7 +397,7 @@ WHERE (WAREHOUSE IS NULL OR LTRIM(RTRIM(WAREHOUSE)) = '') AND STATUS_FLAG NOT IN
 UPDATE [FIN].[KAS_SO_LOADS]
 SET STATUS_FLAG = 'E',
     RS_MESSAGE_TEXT = CASE WHEN RS_MESSAGE_TEXT = '' THEN 'Quantity must be > 0' ELSE RS_MESSAGE_TEXT + '; Quantity must be > 0' END
-WHERE QUANTITY_1 <= 0 AND STATUS_FLAG NOT IN ('L', 'P');
+WHERE (TRY_CAST(QUANTITY AS DECIMAL(18, 4)) IS NULL OR TRY_CAST(QUANTITY AS DECIMAL(18, 4)) <= 0) AND STATUS_FLAG NOT IN ('L', 'P');
 
 -- 6. Validate Sales Price
 UPDATE [FIN].[KAS_SO_LOADS]
@@ -452,8 +459,8 @@ BEGIN TRY
 
     UPDATE [FIN].[KAS_SO_LOADS]
     SET [STATUS_FLAG] = 'P',
-        [BATCH_ID] = @BatchID,
-        [ORDER_NUMBER] = ISNULL(NULLIF(ORDER_NUMBER, ''), 'SO-' + FORMAT(GETDATE(), 'yyMMdd') + '-' + RIGHT('0000' + CAST(GEM_DBKEY AS VARCHAR(10)), 5)),
+        [PROCESSED_DATE] = GETDATE(),
+        [ORDER_NUMBER] = ISNULL(NULLIF(ORDER_NUMBER, ''), 'SO-' + FORMAT(GETDATE(), 'yyMMdd') + '-' + RIGHT('0000' + CAST(ID AS VARCHAR(10)), 5)),
         [RS_MESSAGE_TEXT] = 'Loaded into Ross ERP SOP (Batch ' + @BatchID + ')'
     WHERE [STATUS_FLAG] = 'V';
 

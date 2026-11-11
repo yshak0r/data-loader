@@ -279,10 +279,13 @@ export const ExecutionView: React.FC<ExecutionViewProps> = ({
           addLog('info', `Reloaded updated records from SQL Server ${tableName}.`);
         } else {
           addLog('error', `Loader script error: ${res.message}`);
+          setLastLoaderResult({ loaded: 0, failed: res.failed ?? 0, batchId: res.batchId });
+          await onRefreshData();
           setProgress(100);
         }
       } catch (err: any) {
         addLog('error', `Loader error: ${err.message}`);
+        await onRefreshData();
         setProgress(100);
       } finally {
         setIsRunning(false);

@@ -153,7 +153,7 @@ export const OrderGroupingView: React.FC<OrderGroupingViewProps> = ({
   const filteredGroups = useMemo(() => {
     return orderGroups.filter((g) => {
       if (statusFilter !== 'ALL') {
-        if (statusFilter === 'V' && g.status !== 'valid' && g.status !== 'loaded' && g.status !== 'failed') return false;
+        if (statusFilter === 'V' && g.status !== 'valid') return false;
         if (statusFilter === 'E' && g.status !== 'error') return false;
         if (statusFilter === 'F' && g.status !== 'failed') return false;
         if (statusFilter === 'L' && g.status !== 'loaded') return false;
@@ -173,7 +173,7 @@ export const OrderGroupingView: React.FC<OrderGroupingViewProps> = ({
 
   // Aggregate stats
   const totalOrdersCount = orderGroups.length;
-  const validOrdersCount = orderGroups.filter((g) => g.status === 'valid' || g.status === 'loaded' || g.status === 'failed').length;
+  const validOrdersCount = orderGroups.filter((g) => g.status === 'valid').length;
   const errorOrdersCount = orderGroups.filter((g) => g.status === 'error').length;
   const loadedOrdersCount = orderGroups.filter((g) => g.status === 'loaded').length;
   const failedOrdersCount = orderGroups.filter((g) => g.status === 'failed').length;

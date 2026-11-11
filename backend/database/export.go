@@ -25,7 +25,7 @@ func (m *Manager) ExportData(ctx context.Context, filter string, domain string) 
 	f := strings.ToLower(strings.TrimSpace(filter))
 	switch f {
 	case "valid", "v":
-		statusWhere = "WHERE STATUS_FLAG IN ('V', 'F', 'L', 'P')"
+		statusWhere = "WHERE STATUS_FLAG = 'V'"
 	case "error", "e":
 		statusWhere = "WHERE STATUS_FLAG = 'E'"
 	case "failed", "f":
@@ -51,12 +51,13 @@ func (m *Manager) ExportData(ctx context.Context, filter string, domain string) 
 
 		query := fmt.Sprintf(`
 			SELECT 
-				ORDER_DATE, CUSTOMER_NUMBER, DELIVERY_ADDRESS_CODE, CUSTOMER_REFERENCE,
-				SYS_DELIVERY_DATE, WAREHOUSE, PART_CODE, QUANTITY_1, SALES_PRICE, FREIGHT,
+				ISNULL(CONVERT(VARCHAR(10), ORDER_DATE, 120), ''), CUSTOMER_NUMBER, DELIVERY_ADDRESS_CODE, CUSTOMER_REFERENCE,
+				ISNULL(CONVERT(VARCHAR(10), SYS_DELIVERY_DATE, 120), ''), WAREHOUSE, PART_CODE,
+				ISNULL(TRY_CAST(QUANTITY AS DECIMAL(18, 4)), 0), SALES_PRICE, FREIGHT,
 				ORDER_LINE_NUMBER, ISNULL(ORDER_NUMBER, ''), STATUS_FLAG, RS_MESSAGE_TEXT
 			FROM %s
 			%s
-			ORDER BY GEM_DBKEY ASC
+			ORDER BY ID ASC
 		`, tableName, statusWhere)
 
 		rows, err := db.QueryContext(ctx, query)

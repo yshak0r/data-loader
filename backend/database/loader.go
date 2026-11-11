@@ -158,7 +158,7 @@ func (m *Manager) executeDryRunDc(ctx context.Context, db *sql.DB) (*models.DryR
 	countsQuery := `
 		SELECT 
 			COUNT(*) AS total,
-			ISNULL(SUM(CASE WHEN STATUS_FLAG IN ('V', 'F', 'P', 'L') THEN 1 ELSE 0 END), 0) AS valid,
+			ISNULL(SUM(CASE WHEN STATUS_FLAG = 'V' THEN 1 ELSE 0 END), 0) AS valid,
 			ISNULL(SUM(CASE WHEN STATUS_FLAG = 'E' THEN 1 ELSE 0 END), 0) AS errors,
 			ISNULL(SUM(CASE WHEN STATUS_FLAG IN ('L', 'P') THEN 1 ELSE 0 END), 0) AS loaded,
 			ISNULL(SUM(CASE WHEN STATUS_FLAG = ' ' THEN 1 ELSE 0 END), 0) AS pending
@@ -216,7 +216,7 @@ func (m *Manager) executeDryRunSo(ctx context.Context, db *sql.DB) (*models.DryR
 		UPDATE [FIN].[KAS_SO_LOADS]
 		SET STATUS_FLAG = 'E',
 		    RS_MESSAGE_TEXT = CASE WHEN RS_MESSAGE_TEXT = '' THEN 'Quantity must be > 0' ELSE RS_MESSAGE_TEXT + '; Quantity must be > 0' END
-		WHERE QUANTITY_1 <= 0 AND STATUS_FLAG NOT IN ('L', 'P');
+		WHERE (TRY_CAST(QUANTITY AS DECIMAL(18, 4)) IS NULL OR TRY_CAST(QUANTITY AS DECIMAL(18, 4)) <= 0) AND STATUS_FLAG NOT IN ('L', 'P');
 	`
 	_, _ = db.ExecContext(ctx, rule4)
 
@@ -273,7 +273,7 @@ func (m *Manager) executeDryRunSo(ctx context.Context, db *sql.DB) (*models.DryR
 	countsQuery := `
 		SELECT 
 			COUNT(*) AS total,
-			ISNULL(SUM(CASE WHEN STATUS_FLAG IN ('V', 'F', 'P', 'L') THEN 1 ELSE 0 END), 0) AS valid,
+			ISNULL(SUM(CASE WHEN STATUS_FLAG = 'V' THEN 1 ELSE 0 END), 0) AS valid,
 			ISNULL(SUM(CASE WHEN STATUS_FLAG = 'E' THEN 1 ELSE 0 END), 0) AS errors,
 			ISNULL(SUM(CASE WHEN STATUS_FLAG IN ('L', 'P') THEN 1 ELSE 0 END), 0) AS loaded,
 			ISNULL(SUM(CASE WHEN STATUS_FLAG = ' ' THEN 1 ELSE 0 END), 0) AS pending
@@ -368,13 +368,27 @@ func (m *Manager) ExecuteLoader(ctx context.Context, domain string, scriptConten
 
 // stampFailedRows marks any remaining 'V' rows as 'F' (Load Failed) and returns the count stamped.
 func stampFailedRows(ctx context.Context, db *sql.DB, tableName string, batchID string) int {
-	res, err := db.ExecContext(ctx, fmt.Sprintf(`
-		UPDATE %s
-		SET STATUS_FLAG = 'F',
-		    BATCH_ID = @p1,
-		    RS_MESSAGE_TEXT = 'Load Failed — record was not committed to Ross ERP'
-		WHERE STATUS_FLAG = 'V'
-	`, tableName), batchID)
+	var query string
+	var args []any
+	if strings.Contains(tableName, "KAS_SO_LOADS") {
+		query = fmt.Sprintf(`
+			UPDATE %s
+			SET STATUS_FLAG = 'F',
+			    PROCESSED_DATE = GETDATE(),
+			    RS_MESSAGE_TEXT = 'Load Failed — record was not committed to Ross ERP'
+			WHERE STATUS_FLAG = 'V'
+		`, tableName)
+	} else {
+		query = fmt.Sprintf(`
+			UPDATE %s
+			SET STATUS_FLAG = 'F',
+			    BATCH_ID = @p1,
+			    RS_MESSAGE_TEXT = 'Load Failed — record was not committed to Ross ERP'
+			WHERE STATUS_FLAG = 'V'
+		`, tableName)
+		args = append(args, batchID)
+	}
+	res, err := db.ExecContext(ctx, query, args...)
 	if err != nil {
 		return 0
 	}
@@ -462,17 +476,17 @@ func (m *Manager) executeLoaderSo(ctx context.Context, db *sql.DB, batchID strin
 		updQuery := `
 			UPDATE [FIN].[KAS_SO_LOADS]
 			SET STATUS_FLAG = 'P',
-			    BATCH_ID = @p1,
-			    ORDER_NUMBER = @p2,
+			    ORDER_NUMBER = @p1,
+			    PROCESSED_DATE = GETDATE(),
 			    RS_MESSAGE_TEXT = 'Loaded into Ross ERP SOP'
 			WHERE STATUS_FLAG = 'V'
-			  AND CUSTOMER_NUMBER = @p3
-			  AND DELIVERY_ADDRESS_CODE = @p4
-			  AND CUSTOMER_REFERENCE = @p5
-			  AND ORDER_DATE = @p6
-			  AND SYS_DELIVERY_DATE = @p7;
+			  AND CUSTOMER_NUMBER = @p2
+			  AND DELIVERY_ADDRESS_CODE = @p3
+			  AND CUSTOMER_REFERENCE = @p4
+			  AND ORDER_DATE = @p5
+			  AND SYS_DELIVERY_DATE = @p6;
 		`
-		res, err := db.ExecContext(ctx, updQuery, batchID, generatedOrderNum, k.Cust, k.Deliv, k.Ref, k.OrderDate, k.SysDeliv)
+		res, err := db.ExecContext(ctx, updQuery, generatedOrderNum, k.Cust, k.Deliv, k.Ref, k.OrderDate, k.SysDeliv)
 		if err == nil {
 			aff, _ := res.RowsAffected()
 			totalUpdated += int(aff)

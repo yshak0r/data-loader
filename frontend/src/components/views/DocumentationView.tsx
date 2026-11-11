@@ -511,7 +511,7 @@ export const DocumentationView: React.FC = () => {
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 font-mono text-[11px] pt-1">
                     <div className="p-2 rounded bg-secondary/40 border border-border/60">
                       <strong className="text-foreground">Validation Passed:</strong>
-                      <p className="text-muted-foreground font-sans mt-0.5">Rows with status in <code className="text-primary font-bold">V, F, P, L</code> (all rows that cleared pre-validation).</p>
+                      <p className="text-muted-foreground font-sans mt-0.5">Rows with status <code className="text-primary font-bold">V</code> (verified, ready for loader).</p>
                     </div>
                     <div className="p-2 rounded bg-secondary/40 border border-border/60">
                       <strong className="text-foreground">Quarantined Errors:</strong>
