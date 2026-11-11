@@ -4,17 +4,20 @@
 --
 -- Scope:
 --
---   Orders recorded on FIN.KAS_SO_LOADS (STATUS_FLAG='P', ORDER_NUMBER set) and
---   still matching the staged customer + reference. The ENTIRE order (all
---   lines/details/qty/tax/history rows plus the header) is deleted so header
---   totals stay consistent. Orders not created by the loader are never touched.
+--   Orders recorded on FIN.KAS_SO_LOADS with STATUS_FLAG='V' (validated) AND an
+--   ORDER_NUMBER, and still matching the staged customer + reference. These are
+--   rows that were validated but already have records on the SALES_ORDER_* tables.
+--   The ENTIRE order (all lines/details/qty/history rows plus the header) is
+--   deleted so header totals stay consistent. Rows with STATUS_FLAG='P'
+--   (processed) are NEVER touched, and orders not created by the loader are
+--   never touched.
 --
--- After deleting, the staging rows of those orders are reset to STATUS_FLAG='N'
--- (ORDER_NUMBER / message / processed date cleared) so they can be re-validated
--- and re-loaded. Set @RESET_STAGING = 0 to leave the staging rows as they are.
+-- After deleting, the staging rows of those orders stay STATUS_FLAG='V' (still
+-- validated) with ORDER_NUMBER / ORDER_LINE_NUMBER / processed date cleared, so
+-- they can be loaded again. Set @RESET_STAGING = 0 to leave the staging rows as they are.
 --
 -- Optional filter:
---   @WAREHOUSE - only orders that have a staged line in this warehouse.
+--   @WAREHOUSE - only orders that have a validated staged line in this warehouse.
 --
 -- Not touched (by design):
 --   IC_DEMAND_SUPPLY / reservations / SOP_L_DO_IC_COMMITMENTS - left to the IC engine.
@@ -27,7 +30,7 @@ SET NOCOUNT ON;
 SET XACT_ABORT ON;
 
 DECLARE @WAREHOUSE     VARCHAR(2) = NULL;   -- e.g. '20'; NULL = all loader-created orders
-DECLARE @RESET_STAGING BIT        = 1;      -- 1 = reset staging rows to 'N' after the delete
+DECLARE @RESET_STAGING BIT        = 1;      -- 1 = clear ORDER_NUMBER etc. on the staging rows (they stay 'V')
 
 IF OBJECT_ID('tempdb..#SO_DELETE')    IS NOT NULL DROP TABLE #SO_DELETE;
 IF OBJECT_ID('tempdb..#SO_STAGE_IDS') IS NOT NULL DROP TABLE #SO_STAGE_IDS;
@@ -47,7 +50,7 @@ END
 
 -- ----------------------------------------------------------------------------
 -- 1. Resolve the orders THIS LOADER created
---    Only staging rows that were loaded (STATUS_FLAG='P') and recorded an
+--    Only staging rows with STATUS_FLAG='V' (validated) that recorded an
 --    ORDER_NUMBER are in scope, and the order header must still match the
 --    staged customer + customer reference. Orders that were not created by the
 --    loader are never touched, whatever warehouse they are in.
@@ -64,17 +67,16 @@ JOIN FIN.SALES_ORDER_HEADERS H
  AND H.ORDER_NUMBER       = K.ORDER_NUMBER
  AND H.CUSTOMER_NUMBER    = K.CUSTOMER_NUMBER
  AND H.CUSTOMER_REFERENCE = K.CUSTOMER_REFERENCE
-WHERE K.STATUS_FLAG  = 'P'
+WHERE K.STATUS_FLAG  = 'V'
   AND K.ORDER_NUMBER IS NOT NULL
   AND (@WAREHOUSE IS NULL OR K.WAREHOUSE = @WAREHOUSE);
 
--- Loaded rows that cannot be traced (loaded before ORDER_NUMBER existed)
-DECLARE @UNTRACED INT =
-    (SELECT COUNT(*) FROM FIN.KAS_SO_LOADS WHERE STATUS_FLAG = 'P' AND ORDER_NUMBER IS NULL);
-IF @UNTRACED > 0
-    PRINT CONCAT('CLEAR_SO_TABLES: WARNING - ', @UNTRACED,
-                 ' processed staging row(s) have no ORDER_NUMBER and cannot be cleared by this script ',
-                 '(see the optional backfill in CREATE_KAS_SO_LOADS.sql).');
+-- Validated rows with no ORDER_NUMBER have no order to clean; they are skipped
+DECLARE @NO_ORDER INT =
+    (SELECT COUNT(*) FROM FIN.KAS_SO_LOADS WHERE STATUS_FLAG = 'V' AND ORDER_NUMBER IS NULL);
+IF @NO_ORDER > 0
+    PRINT CONCAT('CLEAR_SO_TABLES: ', @NO_ORDER,
+                 ' validated staging row(s) have no ORDER_NUMBER, so there is no order to clear for them (skipped).');
 
 IF NOT EXISTS (SELECT 1 FROM #SO_DELETE)
 BEGIN
@@ -91,7 +93,7 @@ JOIN #SO_DELETE D
   ON D.COMPANY_CODE = K.COMPANY_CODE
  AND D.DIVISION     = K.DIVISION
  AND D.ORDER_NUMBER = K.ORDER_NUMBER
-WHERE K.STATUS_FLAG = 'P';
+WHERE K.STATUS_FLAG = 'V';
 
 -- ----------------------------------------------------------------------------
 -- 2. Safety checks: never delete orders that have progressed
@@ -174,14 +176,13 @@ JOIN #SO_DELETE D
  AND D.ORDER_NUMBER = T.ORDER_NUMBER;
 
 -- ----------------------------------------------------------------------------
--- 4. Reset the staging rows so the data can be re-validated / re-loaded
+-- 4. Clear the order references on the staging rows (they stay 'V' = validated,
+--    so they can be loaded again)
 -- ----------------------------------------------------------------------------
 IF @RESET_STAGING = 1
 BEGIN
     UPDATE K
-    SET STATUS_FLAG       = 'N',
-        RS_MESSAGE_TEXT   = NULL,
-        ORDER_NUMBER      = NULL,
+    SET ORDER_NUMBER      = NULL,
         ORDER_LINE_NUMBER = NULL,
         PROCESSED_DATE    = NULL
     FROM FIN.KAS_SO_LOADS K
@@ -190,5 +191,5 @@ END;
 
 COMMIT TRANSACTION;
 
-PRINT 'CLEAR_SO_TABLES: cleanup complete.';
+PRINT 'CLEAR_SO_TABLES: cleanup complete (validated rows only; processed P rows untouched).';
 GO
