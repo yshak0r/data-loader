@@ -360,10 +360,15 @@ BEGIN
 END
 GO
  
-EXEC sys.sp_addextendedproperty @name=N'MS_Description',
-     @value=N'Staging table for Sales Order loads from CSV - separate from KAS_DC_LOADS',
-     @level0type=N'SCHEMA', @level0name=N'FIN',
-     @level1type=N'TABLE',  @level1name=N'KAS_SO_LOADS'
+IF NOT EXISTS (
+    SELECT 1 FROM sys.fn_listextendedproperty(N'MS_Description', N'SCHEMA', N'FIN', N'TABLE', N'KAS_SO_LOADS', NULL, NULL)
+)
+BEGIN
+    EXEC sys.sp_addextendedproperty @name=N'MS_Description',
+         @value=N'Staging table for Sales Order loads from CSV - separate from KAS_DC_LOADS',
+         @level0type=N'SCHEMA', @level0name=N'FIN',
+         @level1type=N'TABLE',  @level1name=N'KAS_SO_LOADS';
+END
 GO
 `
 
