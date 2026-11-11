@@ -523,15 +523,9 @@ export const ExecutionView: React.FC<ExecutionViewProps> = ({
               <AlertTriangle className="w-3.5 h-3.5" /> Load Failed / Unloaded
             </div>
             <div className="text-xl font-bold font-mono text-amber-400 mt-1">
-              {dbConnected
-                ? (lastLoaderResult !== null
-                  ? lastLoaderResult.failed.toLocaleString()
-                  : (counts.failed ?? 0).toLocaleString())
-                : '—'}
+              {dbConnected ? (counts.failed ?? 0).toLocaleString() : '—'}
             </div>
-            <div className="text-[11px] text-muted-foreground mt-0.5">
-              {lastLoaderResult !== null ? `From last loader batch` : 'STATUS_FLAG = \'F\''}
-            </div>
+            <div className="text-[11px] text-muted-foreground mt-0.5">STATUS_FLAG = &apos;F&apos;</div>
           </div>
         </div>
 
