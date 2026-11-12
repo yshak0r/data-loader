@@ -445,6 +445,7 @@ export const ImportAndGridView: React.FC<ImportAndGridViewProps> = ({
                 <TableHead className="w-24">Customer</TableHead>
                 <TableHead className="w-20">Ship-To</TableHead>
                 <TableHead className="w-28">Cust PO Ref</TableHead>
+                <TableHead className="w-12 text-center">EDI</TableHead>
                 <TableHead className="w-24">Req Delivery</TableHead>
                 <TableHead className="w-12">Wh</TableHead>
                 <TableHead className="w-28">ROSS Part Code</TableHead>
@@ -493,6 +494,9 @@ export const ImportAndGridView: React.FC<ImportAndGridViewProps> = ({
                     </TableCell>
                     <TableCell className="font-mono font-semibold text-foreground">
                       {r.CUSTOMER_REFERENCE}
+                    </TableCell>
+                    <TableCell className="font-mono text-center text-xs font-semibold text-sky-600 dark:text-sky-400">
+                      {r.EDI_ORDER || <span className="text-muted-foreground/40 font-normal">—</span>}
                     </TableCell>
                     <TableCell className="font-mono text-muted-foreground text-[11px]">
                       {r.SYS_DELIVERY_DATE || '—'}

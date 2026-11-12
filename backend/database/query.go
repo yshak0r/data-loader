@@ -126,6 +126,7 @@ func (m *Manager) QueryGrid(ctx context.Context, params models.GridQueryParams) 
 				ID, COMPANY_CODE, DIVISION,
 				ISNULL(CONVERT(VARCHAR(10), ORDER_DATE, 120), '') AS ORDER_DATE,
 				CUSTOMER_NUMBER, DELIVERY_ADDRESS_CODE, CUSTOMER_REFERENCE,
+				EDI_ORDER,
 				ISNULL(CONVERT(VARCHAR(10), SYS_DELIVERY_DATE, 120), '') AS SYS_DELIVERY_DATE,
 				WAREHOUSE, PART_CODE,
 				ISNULL(TRY_CAST(QUANTITY AS DECIMAL(18, 4)), 0) AS QUANTITY,
@@ -148,16 +149,19 @@ func (m *Manager) QueryGrid(ctx context.Context, params models.GridQueryParams) 
 
 		for rows.Next() {
 			var r models.KasSoLoadRecord
-			var unitSales, orderNum sql.NullString
+			var ediOrder, unitSales, orderNum sql.NullString
 			var salesPrice, freight sql.NullFloat64
 			var lineNum sql.NullInt64
 			if err := rows.Scan(
 				&r.GemDbKey, &r.CompanyCode, &r.Division, &r.OrderDate, &r.CustomerNumber,
-				&r.DeliveryAddressCode, &r.CustomerReference, &r.SysDeliveryDate, &r.Warehouse,
+				&r.DeliveryAddressCode, &r.CustomerReference, &ediOrder, &r.SysDeliveryDate, &r.Warehouse,
 				&r.PartCode, &r.Quantity1, &unitSales, &salesPrice, &freight,
 				&lineNum, &orderNum, &r.StatusFlag, &r.RsMessageText,
 			); err != nil {
 				return nil, fmt.Errorf("failed to scan SO row: %w", err)
+			}
+			if ediOrder.Valid {
+				r.EdiOrder = &ediOrder.String
 			}
 			if unitSales.Valid {
 				r.UnitSales = &unitSales.String

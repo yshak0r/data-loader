@@ -304,6 +304,7 @@ BEGIN
         [CUSTOMER_NUMBER] [varchar](8) NULL,
         [DELIVERY_ADDRESS_CODE] [varchar](10) NULL,
         [CUSTOMER_REFERENCE] [varchar](25) NULL,
+		[EDI_ORDER] [char](1) NULL,
 
         [SYS_DELIVERY_DATE] [datetime] NULL,
         [WAREHOUSE] [varchar](2) NULL,

@@ -197,7 +197,26 @@ func uploadSoCsv(
 		price := parseDecimal(getField(row, headerMap, 8, "SALESPRICE", "SALES_PRICE", "PRICE", "UNITPRICE", "UNIT_PRICE"), 0)
 		freight := parseDecimal(getField(row, headerMap, 9, "FREIGHT", "FREIGHTCHARGE", "FREIGHT_CHARGE"), 0)
 
-		unitSalesVal := getField(row, headerMap, 10, "UNITSALES", "UNIT_SALES", "UOM", "UNIT", "SALESUNIT", "SALES_UNIT")
+		ediVal := getField(row, headerMap, 10, "EDIORDER", "EDI_ORDER", "EDI ORDER", "EDI")
+		var ediOrder *string
+		if ediVal != "" {
+			if len(ediVal) > 1 {
+				ediVal = ediVal[:1]
+			}
+			ediOrder = &ediVal
+		}
+
+		soNumVal := getField(row, headerMap, 11, "SALESORDERNUMBER", "SALES_ORDER_NUMBER", "SALESORDER", "SALES_ORDER", "ORDERNUMBER", "ORDER_NUMBER", "SONO", "SO_NO")
+		var orderNumber *string
+		if soNumVal != "" {
+			if len(soNumVal) > 20 {
+				soNumVal = soNumVal[:20]
+			}
+			orderNumber = &soNumVal
+		}
+
+		// Also allow UNIT_SALES if header explicitly provides it
+		unitSalesVal := getField(row, headerMap, -1, "UNITSALES", "UNIT_SALES", "UOM", "UNIT", "SALESUNIT", "SALES_UNIT")
 		var unitSales *string
 		if unitSalesVal != "" {
 			if len(unitSalesVal) > 10 {
@@ -214,10 +233,13 @@ func uploadSoCsv(
 		rec := models.KasSoLoadRecord{
 			CompanyCode:         companyCode,
 			Division:            division,
+			OrderNumber:         orderNumber,
+			OrderLineNumber:     lineNum,
 			OrderDate:           orderDateStr,
 			CustomerNumber:      customer,
 			DeliveryAddressCode: deliveryCode,
 			CustomerReference:   custRef,
+			EdiOrder:            ediOrder,
 			SysDeliveryDate:     sysDelivStr,
 			Warehouse:           wh,
 			PartCode:            part,
@@ -225,7 +247,6 @@ func uploadSoCsv(
 			UnitSales:           unitSales,
 			SalesPrice:          price,
 			Freight:             freight,
-			OrderLineNumber:     lineNum,
 			StatusFlag:          "N",
 			RsMessageText:       "Staged in SQL Server [FIN].[KAS_SO_LOADS]",
 		}
@@ -267,23 +288,26 @@ func insertSoBatch(ctx context.Context, db *sql.DB, records []models.KasSoLoadRe
 
 	for _, r := range records {
 		valStrings = append(valStrings, fmt.Sprintf(
-			"(@p%d, @p%d, @p%d, @p%d, @p%d, @p%d, @p%d, @p%d, @p%d, @p%d, @p%d, @p%d, @p%d, @p%d, @p%d, @p%d)",
+			"(@p%d, @p%d, @p%d, @p%d, @p%d, @p%d, @p%d, @p%d, @p%d, @p%d, @p%d, @p%d, @p%d, @p%d, @p%d, @p%d, @p%d, @p%d)",
 			argIdx, argIdx+1, argIdx+2, argIdx+3, argIdx+4, argIdx+5, argIdx+6, argIdx+7,
 			argIdx+8, argIdx+9, argIdx+10, argIdx+11, argIdx+12, argIdx+13, argIdx+14, argIdx+15,
+			argIdx+16, argIdx+17,
 		))
 		args = append(args,
-			r.CompanyCode, r.Division, r.OrderDate, r.CustomerNumber, r.DeliveryAddressCode,
-			r.CustomerReference, r.SysDeliveryDate, r.Warehouse, r.PartCode, strconv.FormatFloat(r.Quantity1, 'f', -1, 64),
-			r.UnitSales, r.SalesPrice, r.Freight, r.OrderLineNumber, r.StatusFlag, r.RsMessageText,
+			r.CompanyCode, r.Division, r.OrderNumber, r.OrderLineNumber, r.OrderDate,
+			r.CustomerNumber, r.DeliveryAddressCode, r.CustomerReference, r.EdiOrder,
+			r.SysDeliveryDate, r.Warehouse, r.PartCode, strconv.FormatFloat(r.Quantity1, 'f', -1, 64),
+			r.UnitSales, r.SalesPrice, r.Freight, r.StatusFlag, r.RsMessageText,
 		)
-		argIdx += 16
+		argIdx += 18
 	}
 
 	query := fmt.Sprintf(`
 		INSERT INTO [FIN].[KAS_SO_LOADS] (
-			COMPANY_CODE, DIVISION, ORDER_DATE, CUSTOMER_NUMBER, DELIVERY_ADDRESS_CODE,
-			CUSTOMER_REFERENCE, SYS_DELIVERY_DATE, WAREHOUSE, PART_CODE, QUANTITY,
-			UNIT_SALES, SALES_PRICE, FREIGHT, ORDER_LINE_NUMBER, STATUS_FLAG, RS_MESSAGE_TEXT
+			COMPANY_CODE, DIVISION, ORDER_NUMBER, ORDER_LINE_NUMBER, ORDER_DATE,
+			CUSTOMER_NUMBER, DELIVERY_ADDRESS_CODE, CUSTOMER_REFERENCE, EDI_ORDER,
+			SYS_DELIVERY_DATE, WAREHOUSE, PART_CODE, QUANTITY,
+			UNIT_SALES, SALES_PRICE, FREIGHT, STATUS_FLAG, RS_MESSAGE_TEXT
 		) VALUES %s
 	`, strings.Join(valStrings, ", "))
 
@@ -627,7 +651,7 @@ func isDcHeaderToken(token string) bool {
 }
 
 func isSoHeaderToken(token string) bool {
-	return token == "ORDERDATE" || token == "ORDER" || token == "CUSTOMER" || token == "CUSTREF" || token == "SALESPRICE"
+	return token == "ORDERDATE" || token == "ORDER" || token == "CUSTOMER" || token == "CUSTREF" || token == "SALESPRICE" || token == "EDIORDER" || token == "EDI"
 }
 
 func parseDecimal(s string, def float64) float64 {

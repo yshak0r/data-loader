@@ -9,6 +9,7 @@ type KasSoLoadRecord struct {
 	CustomerNumber      string  `json:"CUSTOMER_NUMBER"`
 	DeliveryAddressCode string  `json:"DELIVERY_ADDRESS_CODE"`
 	CustomerReference   string  `json:"CUSTOMER_REFERENCE"`
+	EdiOrder            *string `json:"EDI_ORDER,omitempty"`
 	SysDeliveryDate     string  `json:"SYS_DELIVERY_DATE"`
 	Warehouse           string  `json:"WAREHOUSE"`
 	PartCode            string  `json:"PART_CODE"`
