@@ -155,7 +155,7 @@ export const ImportAndGridView: React.FC<ImportAndGridViewProps> = ({
               SQL Server Connection Required:
             </span>
             <span>
-              The application requires an active SQL Server database connection to stage records into <code className="font-mono bg-rose-100 dark:bg-rose-900/50 text-rose-950 dark:text-rose-200 px-1 py-0.5 rounded">[FIN].[KAS_DC_LOADS]</code> and execute validation scripts.
+              The application requires an active SQL Server database connection to stage records into <code className="font-mono bg-rose-100 dark:bg-rose-900/50 text-rose-950 dark:text-rose-200 px-1 py-0.5 rounded">{domain === 'sales_orders' ? '[FIN].[KAS_SO_LOADS]' : '[FIN].[KAS_DC_LOADS]'}</code> and execute validation scripts.
             </span>
           </div>
           <Button
@@ -218,7 +218,7 @@ export const ImportAndGridView: React.FC<ImportAndGridViewProps> = ({
               onClick={dbConnected ? onOpenClearStagedDialog : onOpenDbConfig}
               disabled={isLoading || isUploading || counts.total === 0 || !dbConnected}
               className="h-8 text-xs font-medium shadow-sm text-rose-600 dark:text-rose-400 border-rose-300 dark:border-rose-500/30 hover:bg-rose-50 dark:hover:bg-rose-950/30"
-              title="Clear all staged records from [FIN].[KAS_DC_LOADS]"
+              title={`Clear all staged records from ${domain === 'sales_orders' ? '[FIN].[KAS_SO_LOADS]' : '[FIN].[KAS_DC_LOADS]'}`}
             >
               <Trash2 className="w-3.5 h-3.5 mr-1 text-rose-500" />
               Clear Staging
@@ -237,7 +237,7 @@ export const ImportAndGridView: React.FC<ImportAndGridViewProps> = ({
               }`}
             />
             <span className="font-mono font-medium text-[11px] text-foreground">
-              {dbConnected ? `${dbHost} / [${dbDatabase}].[FIN].[KAS_DC_LOADS]` : 'DB OFFLINE'}
+              {dbConnected ? `${dbHost} / [${dbDatabase}].${domain === 'sales_orders' ? '[FIN].[KAS_SO_LOADS]' : '[FIN].[KAS_DC_LOADS]'}` : 'DB OFFLINE'}
             </span>
             {fileName && (
               <>

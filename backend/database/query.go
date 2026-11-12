@@ -129,8 +129,11 @@ func (m *Manager) QueryGrid(ctx context.Context, params models.GridQueryParams) 
 				ISNULL(CONVERT(VARCHAR(10), SYS_DELIVERY_DATE, 120), '') AS SYS_DELIVERY_DATE,
 				WAREHOUSE, PART_CODE,
 				ISNULL(TRY_CAST(QUANTITY AS DECIMAL(18, 4)), 0) AS QUANTITY,
-				UNIT_SALES, SALES_PRICE, FREIGHT,
-				ORDER_LINE_NUMBER, ORDER_NUMBER, STATUS_FLAG, RS_MESSAGE_TEXT
+				UNIT_SALES, 
+				ISNULL(SALES_PRICE, 0) AS SALES_PRICE, 
+				ISNULL(FREIGHT, 0) AS FREIGHT,
+				ISNULL(ORDER_LINE_NUMBER, 0) AS ORDER_LINE_NUMBER, 
+				ORDER_NUMBER, STATUS_FLAG, RS_MESSAGE_TEXT
 			FROM %s
 			%s
 			ORDER BY ID ASC
@@ -146,16 +149,27 @@ func (m *Manager) QueryGrid(ctx context.Context, params models.GridQueryParams) 
 		for rows.Next() {
 			var r models.KasSoLoadRecord
 			var unitSales, orderNum sql.NullString
+			var salesPrice, freight sql.NullFloat64
+			var lineNum sql.NullInt64
 			if err := rows.Scan(
 				&r.GemDbKey, &r.CompanyCode, &r.Division, &r.OrderDate, &r.CustomerNumber,
 				&r.DeliveryAddressCode, &r.CustomerReference, &r.SysDeliveryDate, &r.Warehouse,
-				&r.PartCode, &r.Quantity1, &unitSales, &r.SalesPrice, &r.Freight,
-				&r.OrderLineNumber, &orderNum, &r.StatusFlag, &r.RsMessageText,
+				&r.PartCode, &r.Quantity1, &unitSales, &salesPrice, &freight,
+				&lineNum, &orderNum, &r.StatusFlag, &r.RsMessageText,
 			); err != nil {
 				return nil, fmt.Errorf("failed to scan SO row: %w", err)
 			}
 			if unitSales.Valid {
 				r.UnitSales = &unitSales.String
+			}
+			if salesPrice.Valid {
+				r.SalesPrice = salesPrice.Float64
+			}
+			if freight.Valid {
+				r.Freight = freight.Float64
+			}
+			if lineNum.Valid {
+				r.OrderLineNumber = int(lineNum.Int64)
 			}
 			if orderNum.Valid {
 				r.OrderNumber = &orderNum.String

@@ -78,7 +78,8 @@ export const App: React.FC = () => {
     page = currentPage,
     size = pageSize,
     filter = statusFilter,
-    search = searchQuery
+    search = searchQuery,
+    targetDomain = domain
   ) => {
     setIsLoading(true);
     try {
@@ -87,7 +88,7 @@ export const App: React.FC = () => {
         pageSize: size,
         statusFilter: filter,
         search,
-        domain,
+        domain: targetDomain,
       });
       setDbConnected(res.connected);
       setGridRows(res.rows || []);
@@ -106,6 +107,22 @@ export const App: React.FC = () => {
       setIsLoading(false);
     }
   }, [currentPage, pageSize, statusFilter, searchQuery, domain]);
+
+  const handleDomainChange = useCallback((newDomain: LoaderDomain) => {
+    setDomain(newDomain);
+    setCurrentPage(1);
+    setStatusFilter('ALL');
+    setSearchQuery('');
+    setFileName('');
+    setLastStagedInfo(null);
+    if (dbConnected) {
+      refreshGridData(1, pageSize, 'ALL', '', newDomain);
+    } else {
+      setGridRows([]);
+      setTotalRows(0);
+      setCounts({ total: 0, valid: 0, error: 0, loaded: 0, failed: 0 });
+    }
+  }, [dbConnected, pageSize, refreshGridData]);
 
   // Check hardware licensing status on initial launch
   useEffect(() => {
@@ -391,20 +408,7 @@ export const App: React.FC = () => {
       <TitleBar
         domain={domain}
         division={dbConfig.division || '1'}
-        onDomainChange={(d) => {
-          setDomain(d);
-          if (currentTab === 'lpns' && d === 'inventory') {
-            setCurrentTab('importer');
-          }
-          setGridRows([]);
-          setTotalRows(0);
-          setCounts({ total: 0, valid: 0, error: 0, loaded: 0, failed: 0 });
-          setCurrentPage(1);
-          setStatusFilter('ALL');
-          setSearchQuery('');
-          setFileName('');
-          setLastStagedInfo(null);
-        }}
+        onDomainChange={handleDomainChange}
         companyCode={dbConfig.companyCode}
         dbConnected={dbConnected}
         dbHost={dbConfig.host}
@@ -547,7 +551,7 @@ export const App: React.FC = () => {
               dbDatabase={dbConfig.database}
               onRefreshData={() => refreshGridData()}
               onOpenDbConfig={() => setIsDbConfigOpen(true)}
-              onDomainChange={(d) => setDomain(d)}
+              onDomainChange={handleDomainChange}
             />
           )}
           {currentTab === 'docs' && <DocumentationView />}
