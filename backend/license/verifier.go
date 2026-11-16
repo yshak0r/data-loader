@@ -298,6 +298,13 @@ func ActivateLicense(licenseJSON string) (bool, string, models.LicenseStatus) {
 	licMu.Lock()
 	defer licMu.Unlock()
 
+	// Clear any previous operator session so the newly installed license
+	// immediately enforces its own credentials and operator lock.
+	authenticatedOperator = ""
+	authTimestamp = time.Time{}
+	failedAttempts = 0
+	lockoutUntil = time.Time{}
+
 	currentMachineID := GetMachineFingerprint()
 	var content models.LicenseFileContent
 	if err := json.Unmarshal([]byte(strings.TrimSpace(licenseJSON)), &content); err != nil {
@@ -324,5 +331,28 @@ func ActivateLicense(licenseJSON string) (bool, string, models.LicenseStatus) {
 	}
 
 	return true, fmt.Sprintf("Successfully activated for %s!", content.Payload.ClientName), status
+}
+
+// RevokeCurrentLicense deletes the installed license file from disk and resets the session.
+func RevokeCurrentLicense() (bool, string, models.LicenseStatus) {
+	licMu.Lock()
+	defer licMu.Unlock()
+
+	authenticatedOperator = ""
+	authTimestamp = time.Time{}
+	failedAttempts = 0
+	lockoutUntil = time.Time{}
+
+	licPath := getLicensePath()
+	if err := os.Remove(licPath); err != nil && !os.IsNotExist(err) {
+		return false, fmt.Sprintf("Failed to revoke license file: %v", err), CheckCurrentLicenseStatusUnlocked()
+	}
+
+	currentMachineID := GetMachineFingerprint()
+	return true, "License revoked successfully.", models.LicenseStatus{
+		IsActivated:  false,
+		MachineID:    currentMachineID,
+		ErrorMessage: "No active license found on this machine.",
+	}
 }
 

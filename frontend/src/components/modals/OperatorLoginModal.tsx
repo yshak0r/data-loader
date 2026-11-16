@@ -23,12 +23,14 @@ interface OperatorLoginModalProps {
   open: boolean;
   status: LicenseStatus;
   onLoginSuccess: (status: LicenseStatus) => void;
+  onOpenActivation?: () => void;
 }
 
 export const OperatorLoginModal: React.FC<OperatorLoginModalProps> = ({
   open,
   status,
   onLoginSuccess,
+  onOpenActivation,
 }) => {
   const [password, setPassword] = useState('');
   const [isAuthenticating, setIsAuthenticating] = useState(false);
@@ -128,15 +130,29 @@ export const OperatorLoginModal: React.FC<OperatorLoginModalProps> = ({
           </div>
 
           <div className="flex items-center justify-between pt-2">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => CloseWindow()}
-              className="text-xs h-8 text-zinc-400 border-zinc-800 hover:bg-zinc-900"
-            >
-              Exit Application
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => CloseWindow()}
+                className="text-xs h-8 text-zinc-400 border-zinc-800 hover:bg-zinc-900"
+              >
+                Exit
+              </Button>
+              {onOpenActivation && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={onOpenActivation}
+                  className="text-xs h-8 text-amber-500/90 border-amber-500/30 hover:bg-amber-500/10 hover:border-amber-500/50"
+                  title="Switch or revoke activation license"
+                >
+                  Change License
+                </Button>
+              )}
+            </div>
             <Button
               type="submit"
               disabled={isAuthenticating || !password.trim()}

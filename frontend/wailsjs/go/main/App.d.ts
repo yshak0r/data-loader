@@ -55,6 +55,8 @@ export function RegenerateMachineFingerprint():Promise<string>;
 
 export function ResetSqlScript(arg1:string,arg2:scripts.ScriptSlot):Promise<scripts.ScriptSlotInfo>;
 
+export function RevokeLicense():Promise<models.ActivateResult>;
+
 export function SaveFileDialog(arg1:string,arg2:string):Promise<models.SaveFileResult>;
 
 export function SetSqlScript(arg1:string,arg2:scripts.ScriptSlot,arg3:string,arg4:string,arg5:string):Promise<scripts.ScriptSlotInfo>;

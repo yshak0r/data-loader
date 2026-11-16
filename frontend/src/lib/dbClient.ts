@@ -537,6 +537,9 @@ class DbClient {
           isActivated: res.status.isActivated,
           machineId: res.status.machineId,
           clientName: res.status.clientName,
+          authorizedUser: (res.status as any).authorizedUser,
+          requiresAuth: (res.status as any).requiresAuth,
+          isAuthenticated: (res.status as any).isAuthenticated,
           issuedAt: res.status.issuedAt,
           expiresAt: res.status.expiresAt,
           daysRemaining: res.status.daysRemaining,
@@ -548,6 +551,35 @@ class DbClient {
       return {
         success: false,
         message: err.message || 'Failed to activate license',
+        status: { isActivated: false, machineId: 'ROSS-UNKNOWN' },
+      };
+    }
+  }
+
+  public async revokeLicense(): Promise<{ success: boolean; message: string; status: LicenseStatus }> {
+    try {
+      const res = await (App as any).RevokeLicense();
+      return {
+        success: res.success,
+        message: res.message,
+        status: {
+          isActivated: res.status.isActivated,
+          machineId: res.status.machineId,
+          clientName: res.status.clientName,
+          authorizedUser: res.status.authorizedUser,
+          requiresAuth: res.status.requiresAuth,
+          isAuthenticated: res.status.isAuthenticated,
+          issuedAt: res.status.issuedAt,
+          expiresAt: res.status.expiresAt,
+          daysRemaining: res.status.daysRemaining,
+          isExpired: res.status.isExpired,
+          errorMessage: res.status.errorMessage,
+        },
+      };
+    } catch (err: any) {
+      return {
+        success: false,
+        message: err.message || 'Failed to revoke license',
         status: { isActivated: false, machineId: 'ROSS-UNKNOWN' },
       };
     }

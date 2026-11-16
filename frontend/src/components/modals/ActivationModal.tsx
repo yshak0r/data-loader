@@ -19,6 +19,7 @@ import {
   RefreshCw,
   X,
   ExternalLink,
+  Trash2,
 } from 'lucide-react';
 import { LicenseStatus } from '../../types/security';
 import { dbClient } from '../../lib/dbClient';
@@ -43,6 +44,7 @@ export const ActivationModal: React.FC<ActivationModalProps> = ({
   const [copied, setCopied] = useState(false);
   const [licenseText, setLicenseText] = useState('');
   const [isActivating, setIsActivating] = useState(false);
+  const [isRevoking, setIsRevoking] = useState(false);
   const [isRegenerating, setIsRegenerating] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [currentMachineId, setCurrentMachineId] = useState<string>(status.machineId || '');
@@ -124,6 +126,26 @@ export const ActivationModal: React.FC<ActivationModalProps> = ({
     } catch (err: any) {
       setIsActivating(false);
       setErrorMsg(err.message || 'Invalid license format.');
+    }
+  };
+
+  const handleRevokeLicense = async () => {
+    if (!confirm('Are you sure you want to revoke the current license on this machine? You will need to import or activate a new license key.')) {
+      return;
+    }
+    try {
+      setErrorMsg(null);
+      setIsRevoking(true);
+      const res = await dbClient.revokeLicense();
+      setIsRevoking(false);
+      if (res.success) {
+        onActivationSuccess(res.status);
+      } else {
+        setErrorMsg(res.message);
+      }
+    } catch (err: any) {
+      setIsRevoking(false);
+      setErrorMsg(err.message || 'Failed to revoke license.');
     }
   };
 
@@ -262,6 +284,14 @@ export const ActivationModal: React.FC<ActivationModalProps> = ({
                   {status.clientName || 'Authorized Client'}
                 </span>
               </div>
+              {status.authorizedUser && (
+                <div className="flex justify-between items-center">
+                  <span className="text-muted-foreground font-sans text-[11px]">Authorized Operator:</span>
+                  <span className="font-semibold text-indigo-500 dark:text-indigo-400 font-sans">
+                    {status.authorizedUser}
+                  </span>
+                </div>
+              )}
               <div className="flex justify-between items-center">
                 <span className="text-muted-foreground font-sans text-[11px]">Expiration Date:</span>
                 <span className="text-foreground">
@@ -273,6 +303,20 @@ export const ActivationModal: React.FC<ActivationModalProps> = ({
                 <span className="font-semibold text-emerald-600 dark:text-emerald-400 font-sans">
                   {status.daysRemaining} day(s) remaining
                 </span>
+              </div>
+              <div className="pt-2 flex justify-end">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={handleRevokeLicense}
+                  disabled={isRevoking}
+                  className="h-7 px-2.5 text-xs border-rose-500/30 text-rose-600 dark:text-rose-400 hover:bg-rose-500/10 hover:border-rose-500/50 flex items-center gap-1 font-sans"
+                  title="Revoke and remove current license from this machine"
+                >
+                  <Trash2 className="w-3 h-3" />
+                  {isRevoking ? 'Revoking...' : 'Revoke Current License'}
+                </Button>
               </div>
             </div>
           )}

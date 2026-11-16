@@ -106,6 +106,10 @@ export function ResetSqlScript(arg1, arg2) {
   return window['go']['main']['App']['ResetSqlScript'](arg1, arg2);
 }
 
+export function RevokeLicense() {
+  return window['go']['main']['App']['RevokeLicense']();
+}
+
 export function SaveFileDialog(arg1, arg2) {
   return window['go']['main']['App']['SaveFileDialog'](arg1, arg2);
 }

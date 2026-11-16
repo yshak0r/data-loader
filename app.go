@@ -288,6 +288,16 @@ func (a *App) ActivateLicense(licenseJSON string) models.ActivateResult {
 	}
 }
 
+// RevokeLicense deletes the active license on disk and resets the session.
+func (a *App) RevokeLicense() models.ActivateResult {
+	ok, msg, status := license.RevokeCurrentLicense()
+	return models.ActivateResult{
+		Success: ok,
+		Message: msg,
+		Status:  status,
+	}
+}
+
 // AuthenticateOperator validates the operator password against the active license.
 func (a *App) AuthenticateOperator(password string) models.OperatorLoginResult {
 	return license.AuthenticateOperator(password)

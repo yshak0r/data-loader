@@ -645,6 +645,10 @@ export const App: React.FC = () => {
           setLicenseStatus(newStatus);
           setIsOperatorLoginOpen(false);
         }}
+        onOpenActivation={() => {
+          setIsOperatorLoginOpen(false);
+          setIsActivationOpen(true);
+        }}
       />
     </div>
   );
