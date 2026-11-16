@@ -2,6 +2,9 @@
 export interface LicensePayload {
   machineId: string;
   clientName: string;
+  authorizedUser?: string;
+  credentialHash?: string;
+  credentialSalt?: string;
   issuedAt: string;     // ISO String
   expiresAt: string;    // ISO String
   domains?: string[];   // e.g. ['inventory', 'sales_orders']
@@ -17,10 +20,19 @@ export interface LicenseStatus {
   isActivated: boolean;
   machineId: string;
   clientName?: string;
+  authorizedUser?: string;
+  requiresAuth?: boolean;
+  isAuthenticated?: boolean;
   issuedAt?: string;
   expiresAt?: string;
   daysRemaining?: number;
   isExpired?: boolean;
   errorMessage?: string;
+}
+
+export interface OperatorLoginResult {
+  success: boolean;
+  message: string;
+  status: LicenseStatus;
 }
 

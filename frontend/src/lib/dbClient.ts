@@ -459,6 +459,9 @@ class DbClient {
         isActivated: s.isActivated,
         machineId: s.machineId,
         clientName: s.clientName,
+        authorizedUser: (s as any).authorizedUser,
+        requiresAuth: (s as any).requiresAuth,
+        isAuthenticated: (s as any).isAuthenticated,
         issuedAt: s.issuedAt,
         expiresAt: s.expiresAt,
         daysRemaining: s.daysRemaining,
@@ -471,6 +474,56 @@ class DbClient {
         machineId: 'ROSS-UNKNOWN',
         errorMessage: err.message || 'Licensing API unavailable',
       };
+    }
+  }
+
+  public async authenticateOperator(password: string): Promise<{ success: boolean; message: string; status: LicenseStatus }> {
+    try {
+      const res = await (App as any).AuthenticateOperator(password);
+      return {
+        success: res.success,
+        message: res.message,
+        status: {
+          isActivated: res.status.isActivated,
+          machineId: res.status.machineId,
+          clientName: res.status.clientName,
+          authorizedUser: res.status.authorizedUser,
+          requiresAuth: res.status.requiresAuth,
+          isAuthenticated: res.status.isAuthenticated,
+          issuedAt: res.status.issuedAt,
+          expiresAt: res.status.expiresAt,
+          daysRemaining: res.status.daysRemaining,
+          isExpired: res.status.isExpired,
+          errorMessage: res.status.errorMessage,
+        },
+      };
+    } catch (err: any) {
+      return {
+        success: false,
+        message: err.message || 'Authentication error',
+        status: { isActivated: false, machineId: 'ROSS-UNKNOWN' },
+      };
+    }
+  }
+
+  public async lockOperatorSession(): Promise<LicenseStatus> {
+    try {
+      const s = await (App as any).LockOperatorSession();
+      return {
+        isActivated: s.isActivated,
+        machineId: s.machineId,
+        clientName: s.clientName,
+        authorizedUser: s.authorizedUser,
+        requiresAuth: s.requiresAuth,
+        isAuthenticated: s.isAuthenticated,
+        issuedAt: s.issuedAt,
+        expiresAt: s.expiresAt,
+        daysRemaining: s.daysRemaining,
+        isExpired: s.isExpired,
+        errorMessage: s.errorMessage,
+      };
+    } catch {
+      return { isActivated: false, machineId: 'ROSS-UNKNOWN' };
     }
   }
 

@@ -11,6 +11,7 @@ import { ConnectionDialog } from '@/components/modals/ConnectionDialog';
 import { CleanDatabaseDialog } from '@/components/modals/CleanDatabaseDialog';
 import { ClearStagedDataDialog } from '@/components/modals/ClearStagedDataDialog';
 import { ActivationModal } from '@/components/modals/ActivationModal';
+import { OperatorLoginModal } from '@/components/modals/OperatorLoginModal';
 import { GridCounts, DatabaseConfig, LoaderDomain } from '@/types/dcloader';
 import { LicenseStatus } from '@/types/security';
 import { dbClient } from '@/lib/dbClient';
@@ -46,6 +47,7 @@ export const App: React.FC = () => {
   const [isCleanDialogOpen, setIsCleanDialogOpen] = useState(false);
   const [isClearStagedDialogOpen, setIsClearStagedDialogOpen] = useState(false);
   const [isActivationOpen, setIsActivationOpen] = useState(false);
+  const [isOperatorLoginOpen, setIsOperatorLoginOpen] = useState(false);
   const [licenseStatus, setLicenseStatus] = useState<LicenseStatus>({
     isActivated: false,
     machineId: '',
@@ -132,6 +134,8 @@ export const App: React.FC = () => {
         setLicenseStatus(status);
         if (!status.isActivated) {
           setIsActivationOpen(true);
+        } else if (status.requiresAuth && !status.isAuthenticated) {
+          setIsOperatorLoginOpen(true);
         }
       } catch (err) {
         console.error('Error checking license status:', err);
@@ -419,6 +423,11 @@ export const App: React.FC = () => {
         onDisconnect={handleDisconnect}
         licenseStatus={licenseStatus}
         onOpenLicenseDialog={() => setIsActivationOpen(true)}
+        onLockSession={async () => {
+          const fresh = await dbClient.lockOperatorSession();
+          setLicenseStatus(fresh);
+          setIsOperatorLoginOpen(true);
+        }}
       />
 
       {/* Main App Body */}
@@ -622,6 +631,19 @@ export const App: React.FC = () => {
         onActivationSuccess={(newStatus) => {
           setLicenseStatus(newStatus);
           setIsActivationOpen(false);
+          if (newStatus.requiresAuth && !newStatus.isAuthenticated) {
+            setIsOperatorLoginOpen(true);
+          }
+        }}
+      />
+
+      {/* Operator Credential Lock Modal (1 Person / Credential) */}
+      <OperatorLoginModal
+        open={isOperatorLoginOpen}
+        status={licenseStatus}
+        onLoginSuccess={(newStatus) => {
+          setLicenseStatus(newStatus);
+          setIsOperatorLoginOpen(false);
         }}
       />
     </div>

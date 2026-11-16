@@ -6,6 +6,10 @@ export function ActivateLicense(arg1) {
   return window['go']['main']['App']['ActivateLicense'](arg1);
 }
 
+export function AuthenticateOperator(arg1) {
+  return window['go']['main']['App']['AuthenticateOperator'](arg1);
+}
+
 export function CleanInventoryTables() {
   return window['go']['main']['App']['CleanInventoryTables']();
 }
@@ -68,6 +72,10 @@ export function GetLicenseStatus() {
 
 export function GetMachineFingerprint() {
   return window['go']['main']['App']['GetMachineFingerprint']();
+}
+
+export function LockOperatorSession() {
+  return window['go']['main']['App']['LockOperatorSession']();
 }
 
 export function MinimizeWindow() {

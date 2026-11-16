@@ -288,6 +288,16 @@ func (a *App) ActivateLicense(licenseJSON string) models.ActivateResult {
 	}
 }
 
+// AuthenticateOperator validates the operator password against the active license.
+func (a *App) AuthenticateOperator(password string) models.OperatorLoginResult {
+	return license.AuthenticateOperator(password)
+}
+
+// LockOperatorSession clears the current operator session.
+func (a *App) LockOperatorSession() models.LicenseStatus {
+	return license.LockOperatorSession()
+}
+
 // SQL Script Customization Slots
 func (a *App) GetAllSqlScripts(domain string) map[scripts.ScriptSlot]scripts.ScriptSlotInfo {
 	return a.scriptsMgr.GetAllScriptsConfig(domain)

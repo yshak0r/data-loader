@@ -5,6 +5,8 @@ import {scripts} from '../models';
 
 export function ActivateLicense(arg1:string):Promise<models.ActivateResult>;
 
+export function AuthenticateOperator(arg1:string):Promise<models.OperatorLoginResult>;
+
 export function CleanInventoryTables():Promise<models.CleanTableResult>;
 
 export function CleanSalesTables():Promise<models.CleanTableResult>;
@@ -36,6 +38,8 @@ export function GetDatabaseStatus():Promise<models.ConnectionStatus>;
 export function GetLicenseStatus():Promise<models.LicenseStatus>;
 
 export function GetMachineFingerprint():Promise<string>;
+
+export function LockOperatorSession():Promise<models.LicenseStatus>;
 
 export function MinimizeWindow():Promise<void>;
 

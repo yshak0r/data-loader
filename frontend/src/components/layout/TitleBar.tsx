@@ -30,6 +30,7 @@ interface TitleBarProps {
   onDisconnect?: () => void;
   licenseStatus?: LicenseStatus;
   onOpenLicenseDialog?: () => void;
+  onLockSession?: () => void;
 }
 
 export const TitleBar: React.FC<TitleBarProps> = ({
@@ -44,6 +45,7 @@ export const TitleBar: React.FC<TitleBarProps> = ({
   onDisconnect,
   licenseStatus,
   onOpenLicenseDialog,
+  onLockSession,
 }) => {
   const { theme, toggleTheme } = useTheme();
 
@@ -157,12 +159,30 @@ export const TitleBar: React.FC<TitleBarProps> = ({
                 ? 'bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-700 dark:text-emerald-400 border-emerald-500/30'
                 : 'bg-amber-500/10 hover:bg-amber-500/20 text-amber-700 dark:text-amber-400 border-amber-500/30'
             }`}
-            title={licenseStatus?.isActivated ? `Licensed: ${licenseStatus.clientName}` : 'Click to Activate'}
+            title={
+              licenseStatus?.isActivated
+                ? `Licensed: ${licenseStatus.clientName}${licenseStatus.authorizedUser ? ` (${licenseStatus.authorizedUser})` : ''}`
+                : 'Click to Activate'
+            }
           >
             <KeyRound className="w-3.5 h-3.5" />
             <span className="text-[10px] font-medium hidden md:inline">
-              {licenseStatus?.isActivated ? 'Licensed' : 'Activate'}
+              {licenseStatus?.isActivated
+                ? licenseStatus.authorizedUser
+                  ? licenseStatus.authorizedUser
+                  : 'Licensed'
+                : 'Activate'}
             </span>
+          </button>
+        )}
+
+        {licenseStatus?.requiresAuth && licenseStatus.isAuthenticated && onLockSession && (
+          <button
+            onClick={onLockSession}
+            className="h-7 px-2 mr-1.5 flex items-center gap-1 text-xs border border-zinc-700 bg-zinc-900/60 hover:bg-zinc-800 text-zinc-300 rounded-md transition-colors"
+            title="Lock Operator Session"
+          >
+            <span className="text-[10px] font-medium">Lock</span>
           </button>
         )}
 
