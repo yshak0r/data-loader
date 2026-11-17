@@ -12,7 +12,7 @@ import { CleanDatabaseDialog } from '@/components/modals/CleanDatabaseDialog';
 import { ClearStagedDataDialog } from '@/components/modals/ClearStagedDataDialog';
 import { ActivationModal } from '@/components/modals/ActivationModal';
 import { OperatorLoginModal } from '@/components/modals/OperatorLoginModal';
-import { GridCounts, DatabaseConfig, LoaderDomain } from '@/types/dcloader';
+import { GridCounts, DatabaseConfig, LoaderDomain, ColumnDefinition } from '@/types/dcloader';
 import { LicenseStatus } from '@/types/security';
 import { dbClient } from '@/lib/dbClient';
 import { EventsOn, EventsOff } from '@/../wailsjs/runtime/runtime';
@@ -25,6 +25,7 @@ export const App: React.FC = () => {
   // SQL Server Grid & Table State — holds either DC or SO rows depending on domain
   const [gridRows, setGridRows] = useState<any[]>([]);
   const [totalRows, setTotalRows] = useState<number>(0);
+  const [columns, setColumns] = useState<ColumnDefinition[]>([]);
   const [counts, setCounts] = useState<GridCounts>({
     total: 0,
     valid: 0,
@@ -96,6 +97,7 @@ export const App: React.FC = () => {
       setGridRows(res.rows || []);
       setTotalRows(res.total || 0);
       setCounts(res.counts || { total: 0, valid: 0, error: 0, loaded: 0, failed: 0 });
+      setColumns(res.columns || []);
     } catch (err) {
       console.warn('Grid query notice:', err);
       // Verify actual connectivity so a staging table or grid query issue does not falsely mark DB as offline
@@ -122,6 +124,7 @@ export const App: React.FC = () => {
     } else {
       setGridRows([]);
       setTotalRows(0);
+      setColumns([]);
       setCounts({ total: 0, valid: 0, error: 0, loaded: 0, failed: 0 });
     }
   }, [dbConnected, pageSize, refreshGridData]);
@@ -476,6 +479,7 @@ export const App: React.FC = () => {
             <ImportAndGridView
               domain={domain}
               rows={gridRows}
+              columns={columns}
               totalRows={totalRows}
               counts={counts}
               fileName={fileName}

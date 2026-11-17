@@ -1,5 +1,13 @@
 export type LoaderDomain = 'inventory' | 'sales_orders';
 
+export interface ColumnDefinition {
+  name: string;
+  dataType: string;
+  maxLength: number;
+  isNullable: boolean;
+  isIdentity?: boolean;
+}
+
 // ---------------------------------------------------------------------------
 // DC Inventory Types
 // ---------------------------------------------------------------------------

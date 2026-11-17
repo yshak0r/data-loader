@@ -30,11 +30,12 @@ import {
   TableHead,
   TableCell,
 } from '../ui/table';
-import { KasDcLoadRecord, GridCounts, LoaderDomain } from '../../types/dcloader';
+import { KasDcLoadRecord, GridCounts, LoaderDomain, ColumnDefinition } from '../../types/dcloader';
 
 interface ImportAndGridViewProps {
   rows: any[];
   totalRows: number;
+  columns?: ColumnDefinition[];
   counts: GridCounts;
   fileName: string;
   currentPage: number;
@@ -66,6 +67,7 @@ interface ImportAndGridViewProps {
 export const ImportAndGridView: React.FC<ImportAndGridViewProps> = ({
   rows,
   totalRows,
+  columns = [],
   counts,
   fileName,
   currentPage,
@@ -142,6 +144,90 @@ export const ImportAndGridView: React.FC<ImportAndGridViewProps> = ({
     }
     const cleanDate = dateStr.split(' ')[0] || dateStr;
     return <span className="font-mono text-[11px] text-foreground">{cleanDate}</span>;
+  };
+
+  const soStandardColSet = new Set([
+    'ID',
+    'GEM_DBKEY',
+    'STATUS_FLAG',
+    'ORDER_DATE',
+    'CUSTOMER_NUMBER',
+    'DELIVERY_ADDRESS_CODE',
+    'CUSTOMER_REFERENCE',
+    'EDI_ORDER',
+    'SYS_DELIVERY_DATE',
+    'WAREHOUSE',
+    'PART_CODE',
+    'QUANTITY',
+    'QUANTITY_1',
+    'SALES_PRICE',
+    'FREIGHT',
+    'ORDER_LINE_NUMBER',
+    'ORDER_NUMBER',
+    'RS_MESSAGE_TEXT',
+    'COMPANY_CODE',
+    'DIVISION',
+  ]);
+
+  const dcStandardColSet = new Set([
+    'GEM_DBKEY',
+    'STATUS_FLAG',
+    'COMPANY_CODE',
+    'WAREHOUSE',
+    'PART_CODE',
+    'IC_LOT_NUMBER',
+    'IC_VENDOR_LOT_NUMBER',
+    'BIN_LOCATION',
+    'IC_STATUS_CODE',
+    'UOM_1',
+    'QTY_1',
+    'UNIT_COST',
+    'UOM_2',
+    'QTY_2',
+    'DC_LICENSE_PLATE_ID',
+    'DC_PARENT_LICENSE_PLATE_ID',
+    'DC_LICENSE_PLATE_LINE',
+    'BEST_BEFORE_DATE',
+    'BATCH_DATE',
+    'IC_RETEST_DATE',
+    'CREATION_DATE',
+    'RS_MESSAGE_TEXT',
+  ]);
+
+  const soExtraCols = columns.filter((c) => !soStandardColSet.has(c.name.toUpperCase()));
+  const dcExtraCols = columns.filter((c) => !dcStandardColSet.has(c.name.toUpperCase()));
+
+  const formatColumnTitle = (colName: string) => {
+    return colName
+      .replace(/_/g, ' ')
+      .toLowerCase()
+      .replace(/\b\w/g, (c) => c.toUpperCase());
+  };
+
+  const renderDynamicCell = (val: any, col: ColumnDefinition) => {
+    if (val === null || val === undefined || val === '') {
+      return <span className="text-muted-foreground/40">—</span>;
+    }
+    const lowerType = col.dataType.toLowerCase();
+    if (lowerType.includes('datetime') || lowerType === 'date') {
+      return renderDateCell(String(val));
+    }
+    if (
+      lowerType.includes('decimal') ||
+      lowerType.includes('numeric') ||
+      lowerType.includes('money') ||
+      lowerType.includes('float')
+    ) {
+      const num = Number(val);
+      if (!isNaN(num)) {
+        return (
+          <span className="font-mono text-right font-medium">
+            {num.toLocaleString(undefined, { maximumFractionDigits: 4 })}
+          </span>
+        );
+      }
+    }
+    return <span className="font-mono text-foreground">{String(val)}</span>;
   };
 
   return (
@@ -454,6 +540,11 @@ export const ImportAndGridView: React.FC<ImportAndGridViewProps> = ({
                 <TableHead className="w-20 text-right">Freight</TableHead>
                 <TableHead className="w-14 text-center">Line #</TableHead>
                 <TableHead className="w-24">Order #</TableHead>
+                {soExtraCols.map((c) => (
+                  <TableHead key={c.name} className="whitespace-nowrap px-3 font-medium">
+                    {formatColumnTitle(c.name)}
+                  </TableHead>
+                ))}
                 <TableHead className="min-w-72">SQL Message Column [RS_MESSAGE_TEXT]</TableHead>
               </TableRow>
             </TableHeader>
@@ -522,6 +613,11 @@ export const ImportAndGridView: React.FC<ImportAndGridViewProps> = ({
                     <TableCell className="font-mono text-xs font-semibold text-sky-600 dark:text-sky-400">
                       {r.ORDER_NUMBER || <span className="text-muted-foreground/40 font-normal">—</span>}
                     </TableCell>
+                    {soExtraCols.map((c) => (
+                      <TableCell key={c.name} className="px-3 whitespace-nowrap">
+                        {renderDynamicCell(r[c.name.toUpperCase()] ?? r[c.name], c)}
+                      </TableCell>
+                    ))}
                     <TableCell className="font-mono text-[11px]">
                       <span
                         className={
@@ -568,6 +664,11 @@ export const ImportAndGridView: React.FC<ImportAndGridViewProps> = ({
                 <TableHead className="w-24">Expiry Date</TableHead>
                 <TableHead className="w-24">Retest Date</TableHead>
                 <TableHead className="w-24">Create Date</TableHead>
+                {dcExtraCols.map((c) => (
+                  <TableHead key={c.name} className="whitespace-nowrap px-3 font-medium">
+                    {formatColumnTitle(c.name)}
+                  </TableHead>
+                ))}
                 <TableHead className="min-w-72">SQL Message Column [RS_MESSAGE_TEXT]</TableHead>
               </TableRow>
             </TableHeader>
@@ -699,6 +800,13 @@ export const ImportAndGridView: React.FC<ImportAndGridViewProps> = ({
 
                     {/* Create Date */}
                     <TableCell>{renderDateCell(r.CREATION_DATE)}</TableCell>
+
+                    {/* Dynamic Extra Columns */}
+                    {dcExtraCols.map((c) => (
+                      <TableCell key={c.name} className="px-3 whitespace-nowrap">
+                        {renderDynamicCell(r[c.name.toUpperCase()] ?? r[c.name], c)}
+                      </TableCell>
+                    ))}
 
                     {/* Diagnostic / Error Message Column directly from SQL */}
                     <TableCell>

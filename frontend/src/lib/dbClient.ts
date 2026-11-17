@@ -9,6 +9,7 @@ import {
   SqlScriptSlot,
   SqlScriptInfo,
   LoaderDomain,
+  ColumnDefinition,
 } from '@/types/dcloader';
 import { LicenseStatus, LicenseFileContent } from '@/types/security';
 import * as App from '@/../wailsjs/go/main/App';
@@ -27,6 +28,7 @@ export interface GridQueryResult<T = any> {
   total: number;
   counts: GridCounts;
   connected: boolean;
+  columns?: ColumnDefinition[];
 }
 
 export interface DryRunResult {
