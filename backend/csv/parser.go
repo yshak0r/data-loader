@@ -74,6 +74,9 @@ func UploadCsv(
 	}
 	defer file.Close()
 
+	// Always invalidate schema cache to ensure any recent DDL alterations are immediately picked up
+	database.InvalidateSchemaCache(domain)
+
 	// Query physical table schema from SQL Server
 	schemaCols, _, err := database.QueryTableSchema(ctx, db, domain)
 	if err != nil {

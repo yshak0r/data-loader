@@ -155,6 +155,67 @@ func TestDynamicColumnBinding(t *testing.T) {
 	}
 }
 
+func TestDcUserCsvBinding(t *testing.T) {
+	header := []string{
+		"WAREHOUSE", "PART_CODE", "IC_LOT_NUMBER", "BIN_LOCATION", "IC_STATUS_CODE",
+		"MH NUMBER", "UOM 1", "UOM 2", "QUANTITY 1", "QUANTITY 2", "IC VENDOR LOTNUMBER",
+		"UNIT COST", "BEST BEFORE DATE", "EXPIRY DATE", "RETEST DATE", "CREATE DATE",
+		"LPN NUMBER", "TEST COLUMN", "",
+	}
+	hMap := buildHeaderMap(header)
+
+	targetCols := []models.ColumnDefinition{
+		{Name: "COMPANY_CODE", DataType: "varchar", MaxLength: 10},
+		{Name: "WAREHOUSE", DataType: "varchar", MaxLength: 2},
+		{Name: "PART_CODE", DataType: "varchar", MaxLength: 15, IsNullable: true},
+		{Name: "IC_LOT_NUMBER", DataType: "varchar", MaxLength: 20},
+		{Name: "BIN_LOCATION", DataType: "varchar", MaxLength: 15},
+		{Name: "IC_STATUS_CODE", DataType: "varchar", MaxLength: 8},
+		{Name: "CREATION_DATE", DataType: "datetime"},
+		{Name: "BATCH_DATE", DataType: "datetime", IsNullable: true},
+		{Name: "DC_LICENSE_PLATE_ID", DataType: "varchar", MaxLength: 30},
+		{Name: "DC_PARENT_LICENSE_PLATE_ID", DataType: "varchar", MaxLength: 30},
+		{Name: "UOM_1", DataType: "varchar", MaxLength: 4, IsNullable: true},
+		{Name: "QTY_1", DataType: "numeric"},
+		{Name: "UOM_2", DataType: "varchar", MaxLength: 4, IsNullable: true},
+		{Name: "TEST_COLUMN", DataType: "varchar", MaxLength: 100, IsNullable: true},
+		{Name: "QTY_2", DataType: "numeric"},
+		{Name: "STATUS_FLAG", DataType: "varchar", MaxLength: 1},
+		{Name: "RS_MESSAGE_TEXT", DataType: "varchar", MaxLength: 2000},
+		{Name: "DC_LICENSE_PLATE_LINE", DataType: "smallint"},
+		{Name: "UNIT_COST", DataType: "numeric", IsNullable: true},
+		{Name: "IC_VENDOR_LOT_NUMBER", DataType: "varchar", MaxLength: 20},
+		{Name: "BEST_BEFORE_DATE", DataType: "datetime", IsNullable: true},
+		{Name: "IC_RETEST_DATE", DataType: "datetime"},
+	}
+
+	bindings := bindColumns(targetCols, hMap, false, "CORP", "1")
+
+	bMap := make(map[string]columnBinding)
+	for _, b := range bindings {
+		bMap[b.Col.Name] = b
+	}
+
+	if bMap["TEST_COLUMN"].CsvIndex != 17 {
+		t.Fatalf("expected TEST_COLUMN to be at CSV index 17, got %d", bMap["TEST_COLUMN"].CsvIndex)
+	}
+
+	row := []string{
+		"04", "C01572", "G261115D", "", "QOH", "", "CA", "", "1", "",
+		"0", "7.877", "15-JUL-2027", "15-JUL-2027", "27-DEC-2026", "21-APR-2026",
+		"5", "string",
+	}
+
+	raw := ""
+	if bMap["TEST_COLUMN"].CsvIndex >= 0 && bMap["TEST_COLUMN"].CsvIndex < len(row) {
+		raw = row[bMap["TEST_COLUMN"].CsvIndex]
+	}
+	val := formatColumnValue(bMap["TEST_COLUMN"].Col, raw)
+	if val != "string" {
+		t.Fatalf("expected formatted value to be 'string', got %v", val)
+	}
+}
+
 func TestFormatColumnValue(t *testing.T) {
 	colVarchar := models.ColumnDefinition{Name: "PART_CODE", DataType: "varchar", MaxLength: 5, IsNullable: false}
 	val1 := formatColumnValue(colVarchar, "TOOLONGPARTCODE")

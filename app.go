@@ -340,13 +340,19 @@ func (a *App) GetAllSqlScripts(domain string) map[scripts.ScriptSlot]scripts.Scr
 }
 
 func (a *App) SetSqlScript(domain string, slot scripts.ScriptSlot, name string, filePath string, content string) scripts.ScriptSlotInfo {
-	return a.scriptsMgr.SetCustomScript(domain, slot, name, filePath, content)
+	res := a.scriptsMgr.SetCustomScript(domain, slot, name, filePath, content)
+	database.InvalidateSchemaCache(domain)
+	return res
 }
 
 func (a *App) ResetSqlScript(domain string, slot scripts.ScriptSlot) scripts.ScriptSlotInfo {
-	return a.scriptsMgr.ResetScript(domain, slot)
+	res := a.scriptsMgr.ResetScript(domain, slot)
+	database.InvalidateSchemaCache(domain)
+	return res
 }
 
 func (a *App) ClearAllSqlScripts(domain string) map[scripts.ScriptSlot]scripts.ScriptSlotInfo {
-	return a.scriptsMgr.ClearAllScripts(domain)
+	res := a.scriptsMgr.ClearAllScripts(domain)
+	database.InvalidateSchemaCache(domain)
+	return res
 }

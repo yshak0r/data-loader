@@ -36,7 +36,7 @@ func InvalidateSchemaCache(domain string) {
 // QueryTableSchema introspects physical columns of the staging table from SQL Server using an active *sql.DB.
 func QueryTableSchema(ctx context.Context, db *sql.DB, domain string) ([]models.ColumnDefinition, map[string]models.ColumnDefinition, error) {
 	schemaCacheMu.RLock()
-	if cached, ok := schemaCache[domain]; ok && time.Since(cached.cachedAt) < 2*time.Minute {
+	if cached, ok := schemaCache[domain]; ok && time.Since(cached.cachedAt) < 15*time.Second {
 		schemaCacheMu.RUnlock()
 		return cached.columns, cached.colMap, nil
 	}
@@ -47,20 +47,21 @@ func QueryTableSchema(ctx context.Context, db *sql.DB, domain string) ([]models.
 		tableName = "KAS_SO_LOADS"
 	}
 
+	fullName := fmt.Sprintf("[FIN].[%s]", tableName)
+
 	query := `
 		SELECT 
 			c.name AS column_name,
-			t.name AS data_type,
+			TYPE_NAME(c.user_type_id) AS data_type,
 			c.max_length,
 			c.is_nullable,
 			c.is_identity
 		FROM sys.columns c
-		JOIN sys.types t ON c.user_type_id = t.user_type_id
-		WHERE c.object_id = OBJECT_ID(CONCAT('[FIN].[', @p1, ']'))
+		WHERE c.object_id = COALESCE(OBJECT_ID(@p1), OBJECT_ID(@p2))
 		ORDER BY c.column_id ASC;
 	`
 
-	rows, err := db.QueryContext(ctx, query, tableName)
+	rows, err := db.QueryContext(ctx, query, fullName, tableName)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to query table schema for [FIN].[%s]: %w", tableName, err)
 	}
