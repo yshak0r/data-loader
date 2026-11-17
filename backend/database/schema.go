@@ -2,6 +2,7 @@ package database
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"strings"
 	"sync"
@@ -16,9 +17,9 @@ var (
 )
 
 type cachedTableSchema struct {
-	columns   []models.ColumnDefinition
-	colMap    map[string]models.ColumnDefinition
-	cachedAt  time.Time
+	columns  []models.ColumnDefinition
+	colMap   map[string]models.ColumnDefinition
+	cachedAt time.Time
 }
 
 // InvalidateSchemaCache clears cached columns for a given domain or all domains.
@@ -32,19 +33,14 @@ func InvalidateSchemaCache(domain string) {
 	}
 }
 
-// GetTableSchema introspects the physical columns of the staging table from SQL Server.
-func (m *Manager) GetTableSchema(ctx context.Context, domain string) ([]models.ColumnDefinition, map[string]models.ColumnDefinition, error) {
+// QueryTableSchema introspects physical columns of the staging table from SQL Server using an active *sql.DB.
+func QueryTableSchema(ctx context.Context, db *sql.DB, domain string) ([]models.ColumnDefinition, map[string]models.ColumnDefinition, error) {
 	schemaCacheMu.RLock()
 	if cached, ok := schemaCache[domain]; ok && time.Since(cached.cachedAt) < 2*time.Minute {
 		schemaCacheMu.RUnlock()
 		return cached.columns, cached.colMap, nil
 	}
 	schemaCacheMu.RUnlock()
-
-	db, _, err := m.GetDB()
-	if err != nil {
-		return nil, nil, err
-	}
 
 	tableName := "KAS_DC_LOADS"
 	if domain == "sales_orders" {
@@ -56,7 +52,8 @@ func (m *Manager) GetTableSchema(ctx context.Context, domain string) ([]models.C
 			c.name AS column_name,
 			t.name AS data_type,
 			c.max_length,
-			c.is_nullable
+			c.is_nullable,
+			c.is_identity
 		FROM sys.columns c
 		JOIN sys.types t ON c.user_type_id = t.user_type_id
 		WHERE c.object_id = OBJECT_ID(CONCAT('[FIN].[', @p1, ']'))
@@ -76,11 +73,13 @@ func (m *Manager) GetTableSchema(ctx context.Context, domain string) ([]models.C
 		var col models.ColumnDefinition
 		var maxLen int16
 		var isNullable bool
-		if err := rows.Scan(&col.Name, &col.DataType, &maxLen, &isNullable); err != nil {
+		var isIdentity bool
+		if err := rows.Scan(&col.Name, &col.DataType, &maxLen, &isNullable, &isIdentity); err != nil {
 			return nil, nil, fmt.Errorf("failed to scan column schema: %w", err)
 		}
 		col.MaxLength = int(maxLen)
 		col.IsNullable = isNullable
+		col.IsIdentity = isIdentity
 		cols = append(cols, col)
 		colMap[strings.ToUpper(col.Name)] = col
 	}
@@ -96,4 +95,13 @@ func (m *Manager) GetTableSchema(ctx context.Context, domain string) ([]models.C
 	}
 
 	return cols, colMap, nil
+}
+
+// GetTableSchema introspects the physical columns of the staging table from SQL Server.
+func (m *Manager) GetTableSchema(ctx context.Context, domain string) ([]models.ColumnDefinition, map[string]models.ColumnDefinition, error) {
+	db, _, err := m.GetDB()
+	if err != nil {
+		return nil, nil, err
+	}
+	return QueryTableSchema(ctx, db, domain)
 }

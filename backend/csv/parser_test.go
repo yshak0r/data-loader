@@ -2,6 +2,8 @@ package csv
 
 import (
 	"testing"
+
+	"dc-loader-wails/backend/models"
 )
 
 func TestParseDate(t *testing.T) {
@@ -94,5 +96,87 @@ func TestGetFieldAliases(t *testing.T) {
 	parentLpn := getField(row, hMap, -1, "DCPARENTLICENSEPLATEID", "DC_PARENT_LICENSE_PLATE_ID", "PARENTLPNNUMBER", "PARENT_LPN_NUMBER", "PARENTLPNID", "PARENT_LPN_ID", "PARENTLPN", "PARENT_LPN")
 	if parentLpn != "" {
 		t.Errorf("expected parent LPN to be empty string when omitted from CSV, got %q", parentLpn)
+	}
+}
+
+func TestDynamicColumnBinding(t *testing.T) {
+	// Target table has standard columns plus custom columns (CUSTOM_NOTE, UNIT_SALES)
+	targetCols := []models.ColumnDefinition{
+		{Name: "COMPANY_CODE", DataType: "varchar", MaxLength: 8},
+		{Name: "DIVISION", DataType: "varchar", MaxLength: 8},
+		{Name: "ORDER_LINE_NUMBER", DataType: "int"},
+		{Name: "CUSTOMER_NUMBER", DataType: "varchar", MaxLength: 8},
+		{Name: "QUANTITY", DataType: "decimal", MaxLength: 18},
+		{Name: "UNIT_SALES", DataType: "varchar", MaxLength: 10, IsNullable: true},
+		{Name: "CUSTOM_NOTE", DataType: "varchar", MaxLength: 50, IsNullable: true},
+		{Name: "STATUS_FLAG", DataType: "varchar", MaxLength: 1},
+	}
+
+	// CSV has headers, including EXTRA_UNUSED_COL (should be ignored) and CUSTOM_NOTE
+	header := []string{"EXTRA_UNUSED_COL", "Customer", "Quantity", "Custom Note", "Unit Sales"}
+	hMap := buildHeaderMap(header)
+
+	bindings := bindColumns(targetCols, hMap, true, "CORP", "1")
+
+	bMap := make(map[string]columnBinding)
+	for _, b := range bindings {
+		bMap[b.Col.Name] = b
+	}
+
+	// Verify COMPANY_CODE and DIVISION are bound as system
+	if !bMap["COMPANY_CODE"].IsSystem || bMap["COMPANY_CODE"].SystemVal != "CORP" {
+		t.Errorf("expected COMPANY_CODE to be system CORP, got %+v", bMap["COMPANY_CODE"])
+	}
+	if !bMap["DIVISION"].IsSystem || bMap["DIVISION"].SystemVal != "1" {
+		t.Errorf("expected DIVISION to be system 1, got %+v", bMap["DIVISION"])
+	}
+	if !bMap["ORDER_LINE_NUMBER"].IsComputedLine {
+		t.Errorf("expected ORDER_LINE_NUMBER to be computed line, got %+v", bMap["ORDER_LINE_NUMBER"])
+	}
+
+	// Verify CUSTOMER_NUMBER mapped via alias "Customer" (index 1)
+	if bMap["CUSTOMER_NUMBER"].CsvIndex != 1 {
+		t.Errorf("expected CUSTOMER_NUMBER to be at index 1, got %d", bMap["CUSTOMER_NUMBER"].CsvIndex)
+	}
+
+	// Verify QUANTITY mapped via alias "Quantity" (index 2)
+	if bMap["QUANTITY"].CsvIndex != 2 {
+		t.Errorf("expected QUANTITY to be at index 2, got %d", bMap["QUANTITY"].CsvIndex)
+	}
+
+	// Verify CUSTOM_NOTE mapped dynamically via clean name (index 3)
+	if bMap["CUSTOM_NOTE"].CsvIndex != 3 {
+		t.Errorf("expected CUSTOM_NOTE to be at index 3, got %d", bMap["CUSTOM_NOTE"].CsvIndex)
+	}
+
+	// Verify UNIT_SALES mapped via alias/clean name (index 4)
+	if bMap["UNIT_SALES"].CsvIndex != 4 {
+		t.Errorf("expected UNIT_SALES to be at index 4, got %d", bMap["UNIT_SALES"].CsvIndex)
+	}
+}
+
+func TestFormatColumnValue(t *testing.T) {
+	colVarchar := models.ColumnDefinition{Name: "PART_CODE", DataType: "varchar", MaxLength: 5, IsNullable: false}
+	val1 := formatColumnValue(colVarchar, "TOOLONGPARTCODE")
+	if val1 != "TOOLO" {
+		t.Errorf("expected varchar trimmed to 5 chars 'TOOLO', got %v", val1)
+	}
+
+	colDecimal := models.ColumnDefinition{Name: "PRICE", DataType: "decimal", IsNullable: false}
+	val2 := formatColumnValue(colDecimal, "$1,234.50")
+	if val2 != 1234.50 {
+		t.Errorf("expected decimal 1234.50, got %v", val2)
+	}
+
+	colDate := models.ColumnDefinition{Name: "ORDER_DATE", DataType: "datetime", IsNullable: true}
+	val3 := formatColumnValue(colDate, "15-JUL-2027")
+	if val3 != "2027-07-15" {
+		t.Errorf("expected date 2027-07-15, got %v", val3)
+	}
+
+	colNullDate := models.ColumnDefinition{Name: "OPT_DATE", DataType: "datetime", IsNullable: true}
+	val4 := formatColumnValue(colNullDate, "")
+	if val4 != nil {
+		t.Errorf("expected nullable date with empty input to be nil, got %v", val4)
 	}
 }

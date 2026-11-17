@@ -50,6 +50,7 @@ type ColumnDefinition struct {
 	DataType   string `json:"dataType"`
 	MaxLength  int    `json:"maxLength"`
 	IsNullable bool   `json:"isNullable"`
+	IsIdentity bool   `json:"isIdentity"`
 }
 
 // GridQueryResult represents paginated data returned to frontend.
