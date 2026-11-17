@@ -282,6 +282,7 @@ class DbClient {
         total: res.total || 0,
         counts: res.counts || { total: 0, valid: 0, error: 0, loaded: 0 },
         connected: res.connected !== false,
+        columns: res.columns || [],
       };
     } catch (err: any) {
       return {
@@ -289,6 +290,7 @@ class DbClient {
         total: 0,
         counts: { total: 0, valid: 0, error: 0, loaded: 0 },
         connected: false,
+        columns: [],
       };
     }
   }

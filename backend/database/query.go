@@ -21,8 +21,12 @@ func (m *Manager) QueryGrid(ctx context.Context, params models.GridQueryParams) 
 		tableName = "[FIN].[KAS_SO_LOADS]"
 	}
 
-	// Automatically ensure the staging table and schema exist
-	_, _ = m.EnsureTableExists(ctx, params.Domain)
+	// Ensure the staging table exists if not already present
+	checkQuery := fmt.Sprintf("IF OBJECT_ID('%s', 'U') IS NULL SELECT 0 ELSE SELECT 1", tableName)
+	var tblExists int
+	if err := db.QueryRowContext(ctx, checkQuery).Scan(&tblExists); err == nil && tblExists == 0 {
+		_, _ = m.EnsureTableExists(ctx, params.Domain)
+	}
 
 	// Dynamically inspect existing physical columns from SQL Server
 	schemaCols, _, _ := m.GetTableSchema(ctx, params.Domain)
@@ -203,6 +207,25 @@ func (m *Manager) QueryGrid(ctx context.Context, params models.GridQueryParams) 
 		}
 
 		rowsSlice = append(rowsSlice, rowMap)
+	}
+
+	// Ensure all returned column names are present in Columns metadata
+	colSet := make(map[string]bool)
+	for _, c := range schemaCols {
+		colSet[strings.ToUpper(c.Name)] = true
+	}
+	for _, name := range colNames {
+		upper := strings.ToUpper(name)
+		if !colSet[upper] {
+			schemaCols = append(schemaCols, models.ColumnDefinition{
+				Name:       name,
+				DataType:   "varchar",
+				MaxLength:  0,
+				IsNullable: true,
+				IsIdentity: false,
+			})
+			colSet[upper] = true
+		}
 	}
 
 	return &models.GridQueryResult{

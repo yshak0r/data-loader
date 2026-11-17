@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import {
   Upload,
   Search,
@@ -194,8 +194,42 @@ export const ImportAndGridView: React.FC<ImportAndGridViewProps> = ({
     'RS_MESSAGE_TEXT',
   ]);
 
-  const soExtraCols = columns.filter((c) => !soStandardColSet.has(c.name.toUpperCase()));
-  const dcExtraCols = columns.filter((c) => !dcStandardColSet.has(c.name.toUpperCase()));
+  const allDiscoveredCols = useMemo(() => {
+    const colMap = new Map<string, ColumnDefinition>();
+    for (const c of columns) {
+      if (c && c.name) {
+        colMap.set(c.name.toUpperCase(), c);
+      }
+    }
+    // Defensive auto-discovery: also inspect keys from row records so custom columns are always visible
+    if (rows && rows.length > 0) {
+      for (const row of rows) {
+        if (!row || typeof row !== 'object') continue;
+        for (const key of Object.keys(row)) {
+          const upper = key.toUpperCase();
+          if (!colMap.has(upper) && !upper.startsWith('_')) {
+            colMap.set(upper, {
+              name: key,
+              dataType: 'varchar',
+              maxLength: 0,
+              isNullable: true,
+              isIdentity: false,
+            });
+          }
+        }
+      }
+    }
+    return Array.from(colMap.values());
+  }, [columns, rows]);
+
+  const soExtraCols = useMemo(
+    () => allDiscoveredCols.filter((c) => !soStandardColSet.has(c.name.toUpperCase())),
+    [allDiscoveredCols]
+  );
+  const dcExtraCols = useMemo(
+    () => allDiscoveredCols.filter((c) => !dcStandardColSet.has(c.name.toUpperCase())),
+    [allDiscoveredCols]
+  );
 
   const formatColumnTitle = (colName: string) => {
     return colName
