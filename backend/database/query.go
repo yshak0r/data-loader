@@ -2,7 +2,6 @@ package database
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"strings"
 
@@ -24,6 +23,9 @@ func (m *Manager) QueryGrid(ctx context.Context, params models.GridQueryParams) 
 
 	// Automatically ensure the staging table and schema exist
 	_, _ = m.EnsureTableExists(ctx, params.Domain)
+
+	// Dynamically inspect existing physical columns from SQL Server
+	schemaCols, _, _ := m.GetTableSchema(ctx, params.Domain)
 
 	page := params.Page
 	if page < 1 {
@@ -56,23 +58,22 @@ func (m *Manager) QueryGrid(ctx context.Context, params models.GridQueryParams) 
 		}
 	}
 
-	// Text search
+	// Text search: build dynamic LIKE filter across all textual columns
 	search := strings.TrimSpace(params.Search)
 	if search != "" {
 		searchPattern := "%" + search + "%"
-		if isSO {
-			conditions = append(conditions, fmt.Sprintf(
-				"(CUSTOMER_NUMBER LIKE @p%d OR CUSTOMER_REFERENCE LIKE @p%d OR PART_CODE LIKE @p%d OR WAREHOUSE LIKE @p%d OR ISNULL(ORDER_NUMBER, '') LIKE @p%d OR RS_MESSAGE_TEXT LIKE @p%d)",
-				argIdx, argIdx, argIdx, argIdx, argIdx, argIdx,
-			))
-		} else {
-			conditions = append(conditions, fmt.Sprintf(
-				"(PART_CODE LIKE @p%d OR IC_LOT_NUMBER LIKE @p%d OR DC_LICENSE_PLATE_ID LIKE @p%d OR WAREHOUSE LIKE @p%d OR BIN_LOCATION LIKE @p%d OR RS_MESSAGE_TEXT LIKE @p%d)",
-				argIdx, argIdx, argIdx, argIdx, argIdx, argIdx,
-			))
+		var textColExprs []string
+		for _, c := range schemaCols {
+			lowerType := strings.ToLower(c.DataType)
+			if strings.Contains(lowerType, "char") || strings.Contains(lowerType, "text") {
+				textColExprs = append(textColExprs, fmt.Sprintf("ISNULL(%s, '') LIKE @p%d", c.Name, argIdx))
+			}
 		}
-		args = append(args, searchPattern)
-		argIdx++
+		if len(textColExprs) > 0 {
+			conditions = append(conditions, "("+strings.Join(textColExprs, " OR ")+")")
+			args = append(args, searchPattern)
+			argIdx++
+		}
 	}
 
 	whereClause := ""
@@ -108,135 +109,100 @@ func (m *Manager) QueryGrid(ctx context.Context, params models.GridQueryParams) 
 	var counts models.GridCounts
 	_ = db.QueryRowContext(ctx, countsQuery).Scan(&counts.Total, &counts.Valid, &counts.Error, &counts.Loaded, &counts.Failed)
 
-	// If no rows match, return early with empty slice
+	// If no rows match, return early with empty slice and discovered column metadata
 	if totalFiltered == 0 {
 		return &models.GridQueryResult{
 			Rows:      []any{},
 			Total:     0,
 			Counts:    counts,
 			Connected: true,
+			Columns:   schemaCols,
 		}, nil
 	}
 
-	// 3. Paginated query
-	rowsSlice := make([]any, 0)
+	// 3. Paginated dynamic query
+	var selectExpressions []string
+	for _, c := range schemaCols {
+		lowerType := strings.ToLower(c.DataType)
+		if strings.Contains(lowerType, "datetime") || lowerType == "date" {
+			selectExpressions = append(selectExpressions, fmt.Sprintf("ISNULL(CONVERT(VARCHAR(19), [%s], 120), '') AS [%s]", c.Name, c.Name))
+		} else if strings.Contains(lowerType, "decimal") || strings.Contains(lowerType, "numeric") || strings.Contains(lowerType, "money") {
+			selectExpressions = append(selectExpressions, fmt.Sprintf("ISNULL(TRY_CAST([%s] AS DECIMAL(18, 4)), 0) AS [%s]", c.Name, c.Name))
+		} else if strings.Contains(lowerType, "int") || strings.Contains(lowerType, "bigint") || lowerType == "smallint" || lowerType == "tinyint" {
+			selectExpressions = append(selectExpressions, fmt.Sprintf("ISNULL([%s], 0) AS [%s]", c.Name, c.Name))
+		} else {
+			selectExpressions = append(selectExpressions, fmt.Sprintf("ISNULL([%s], '') AS [%s]", c.Name, c.Name))
+		}
+	}
+
+	primaryKeyCol := "GEM_DBKEY"
 	if isSO {
-		dataQuery := fmt.Sprintf(`
-			SELECT 
-				ID, COMPANY_CODE, DIVISION,
-				ISNULL(CONVERT(VARCHAR(10), ORDER_DATE, 120), '') AS ORDER_DATE,
-				CUSTOMER_NUMBER, DELIVERY_ADDRESS_CODE, CUSTOMER_REFERENCE,
-				EDI_ORDER,
-				ISNULL(CONVERT(VARCHAR(10), SYS_DELIVERY_DATE, 120), '') AS SYS_DELIVERY_DATE,
-				WAREHOUSE, PART_CODE,
-				ISNULL(TRY_CAST(QUANTITY AS DECIMAL(18, 4)), 0) AS QUANTITY,
-				UNIT_SALES, 
-				ISNULL(SALES_PRICE, 0) AS SALES_PRICE, 
-				ISNULL(FREIGHT, 0) AS FREIGHT,
-				ISNULL(ORDER_LINE_NUMBER, 0) AS ORDER_LINE_NUMBER, 
-				ORDER_NUMBER, STATUS_FLAG, RS_MESSAGE_TEXT
-			FROM %s
+		primaryKeyCol = "ID"
+	}
+
+	selectClause := strings.Join(selectExpressions, ", ")
+	if selectClause == "" {
+		selectClause = "*"
+	}
+
+	dataQuery := fmt.Sprintf(`
+		SELECT 
 			%s
-			ORDER BY ID ASC
-			OFFSET %d ROWS FETCH NEXT %d ROWS ONLY
-		`, tableName, whereClause, offset, pageSize)
+		FROM %s
+		%s
+		ORDER BY [%s] ASC
+		OFFSET %d ROWS FETCH NEXT %d ROWS ONLY
+	`, selectClause, tableName, whereClause, primaryKeyCol, offset, pageSize)
 
-		rows, err := db.QueryContext(ctx, dataQuery, args...)
-		if err != nil {
-			return nil, fmt.Errorf("failed to query SO grid data: %w", err)
-		}
-		defer rows.Close()
+	rows, err := db.QueryContext(ctx, dataQuery, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query grid data: %w", err)
+	}
+	defer rows.Close()
 
-		for rows.Next() {
-			var r models.KasSoLoadRecord
-			var ediOrder, unitSales, orderNum sql.NullString
-			var salesPrice, freight sql.NullFloat64
-			var lineNum sql.NullInt64
-			if err := rows.Scan(
-				&r.GemDbKey, &r.CompanyCode, &r.Division, &r.OrderDate, &r.CustomerNumber,
-				&r.DeliveryAddressCode, &r.CustomerReference, &ediOrder, &r.SysDeliveryDate, &r.Warehouse,
-				&r.PartCode, &r.Quantity1, &unitSales, &salesPrice, &freight,
-				&lineNum, &orderNum, &r.StatusFlag, &r.RsMessageText,
-			); err != nil {
-				return nil, fmt.Errorf("failed to scan SO row: %w", err)
-			}
-			if ediOrder.Valid {
-				r.EdiOrder = &ediOrder.String
-			}
-			if unitSales.Valid {
-				r.UnitSales = &unitSales.String
-			}
-			if salesPrice.Valid {
-				r.SalesPrice = salesPrice.Float64
-			}
-			if freight.Valid {
-				r.Freight = freight.Float64
-			}
-			if lineNum.Valid {
-				r.OrderLineNumber = int(lineNum.Int64)
-			}
-			if orderNum.Valid {
-				r.OrderNumber = &orderNum.String
-			}
-			rowsSlice = append(rowsSlice, r)
-		}
-	} else {
-		dataQuery := fmt.Sprintf(`
-			SELECT 
-				GEM_DBKEY, COMPANY_CODE, WAREHOUSE, PART_CODE, IC_LOT_NUMBER,
-				BIN_LOCATION, IC_STATUS_CODE,
-				ISNULL(CONVERT(VARCHAR(10), CREATION_DATE, 120), '') AS CREATION_DATE,
-				CONVERT(VARCHAR(10), BATCH_DATE, 120) AS BATCH_DATE,
-				DC_LICENSE_PLATE_ID, DC_PARENT_LICENSE_PLATE_ID, UOM_1, QTY_1,
-				UOM_2, QTY_2, STATUS_FLAG, RS_MESSAGE_TEXT, DC_LICENSE_PLATE_LINE,
-				UNIT_COST, IC_VENDOR_LOT_NUMBER,
-				CONVERT(VARCHAR(10), BEST_BEFORE_DATE, 120) AS BEST_BEFORE_DATE,
-				ISNULL(CONVERT(VARCHAR(10), IC_RETEST_DATE, 120), '') AS IC_RETEST_DATE
-			FROM %s
-			%s
-			ORDER BY GEM_DBKEY ASC
-			OFFSET %d ROWS FETCH NEXT %d ROWS ONLY
-		`, tableName, whereClause, offset, pageSize)
+	colNames, err := rows.Columns()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get columns from result set: %w", err)
+	}
 
-		rows, err := db.QueryContext(ctx, dataQuery, args...)
-		if err != nil {
-			return nil, fmt.Errorf("failed to query DC grid data: %w", err)
+	rowsSlice := make([]any, 0)
+	for rows.Next() {
+		colValues := make([]any, len(colNames))
+		scanArgs := make([]any, len(colNames))
+		for i := range colValues {
+			scanArgs[i] = &colValues[i]
 		}
-		defer rows.Close()
 
-		for rows.Next() {
-			var r models.KasDcLoadRecord
-			var partCode, batchDate, uom1, uom2, bestBefore sql.NullString
-			var unitCost sql.NullFloat64
-			if err := rows.Scan(
-				&r.GemDbKey, &r.CompanyCode, &r.Warehouse, &partCode, &r.IcLotNumber,
-				&r.BinLocation, &r.IcStatusCode, &r.CreationDate, &batchDate,
-				&r.DcLicensePlateID, &r.DcParentLicensePlateID, &uom1, &r.Qty1,
-				&uom2, &r.Qty2, &r.StatusFlag, &r.RsMessageText, &r.DcLicensePlateLine,
-				&unitCost, &r.IcVendorLotNumber, &bestBefore, &r.IcRetestDate,
-			); err != nil {
-				return nil, fmt.Errorf("failed to scan DC row: %w", err)
-			}
-			if partCode.Valid {
-				r.PartCode = &partCode.String
-			}
-			if batchDate.Valid {
-				r.BatchDate = &batchDate.String
-			}
-			if uom1.Valid {
-				r.Uom1 = &uom1.String
-			}
-			if uom2.Valid {
-				r.Uom2 = &uom2.String
-			}
-			if bestBefore.Valid {
-				r.BestBeforeDate = &bestBefore.String
-			}
-			if unitCost.Valid {
-				r.UnitCost = &unitCost.Float64
-			}
-			rowsSlice = append(rowsSlice, r)
+		if err := rows.Scan(scanArgs...); err != nil {
+			return nil, fmt.Errorf("failed to scan row: %w", err)
 		}
+
+		rowMap := make(map[string]any)
+		for i, col := range colNames {
+			val := colValues[i]
+			upperCol := strings.ToUpper(col)
+
+			switch v := val.(type) {
+			case nil:
+				rowMap[upperCol] = nil
+			case []byte:
+				rowMap[upperCol] = string(v)
+			default:
+				rowMap[upperCol] = v
+			}
+		}
+
+		// Backward-compatibility aliases for views expecting standardized keys
+		if isSO {
+			if idVal, exists := rowMap["ID"]; exists {
+				rowMap["GEM_DBKEY"] = idVal
+			}
+			if qtyVal, exists := rowMap["QUANTITY"]; exists {
+				rowMap["QUANTITY_1"] = qtyVal
+			}
+		}
+
+		rowsSlice = append(rowsSlice, rowMap)
 	}
 
 	return &models.GridQueryResult{
@@ -244,6 +210,7 @@ func (m *Manager) QueryGrid(ctx context.Context, params models.GridQueryParams) 
 		Total:     totalFiltered,
 		Counts:    counts,
 		Connected: true,
+		Columns:   schemaCols,
 	}, nil
 }
 

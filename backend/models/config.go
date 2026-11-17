@@ -44,12 +44,21 @@ type GridQueryParams struct {
 	Domain       string `json:"domain"` // "inventory" | "sales_orders"
 }
 
+// ColumnDefinition provides frontend metadata for dynamically introspected columns.
+type ColumnDefinition struct {
+	Name       string `json:"name"`
+	DataType   string `json:"dataType"`
+	MaxLength  int    `json:"maxLength"`
+	IsNullable bool   `json:"isNullable"`
+}
+
 // GridQueryResult represents paginated data returned to frontend.
 type GridQueryResult struct {
-	Rows      []any      `json:"rows"`
-	Total     int        `json:"total"`
-	Counts    GridCounts `json:"counts"`
-	Connected bool       `json:"connected"`
+	Rows      []any              `json:"rows"`
+	Total     int                `json:"total"`
+	Counts    GridCounts         `json:"counts"`
+	Connected bool               `json:"connected"`
+	Columns   []ColumnDefinition `json:"columns,omitempty"`
 }
 
 // RuleBreakdownItem contains counts per validation rule failure.

@@ -270,6 +270,7 @@ func (m *Manager) EnsureTableExistsWithScript(ctx context.Context, domain string
 					}
 				}
 				if allDefOk {
+					InvalidateSchemaCache(domain)
 					return true, fmt.Sprintf("Staging table %s initialized using default DDL (custom script had error in batch %d: %v)", tableName, i+1, err)
 				}
 			}
@@ -277,6 +278,7 @@ func (m *Manager) EnsureTableExistsWithScript(ctx context.Context, domain string
 		}
 	}
 
+	InvalidateSchemaCache(domain)
 	return true, fmt.Sprintf("Staging table %s and dependencies verified and ready.", tableName)
 }
 
