@@ -150,6 +150,26 @@ export namespace models {
 	        this.message = source["message"];
 	    }
 	}
+	export class ColumnDefinition {
+	    name: string;
+	    dataType: string;
+	    maxLength: number;
+	    isNullable: boolean;
+	    isIdentity: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new ColumnDefinition(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.dataType = source["dataType"];
+	        this.maxLength = source["maxLength"];
+	        this.isNullable = source["isNullable"];
+	        this.isIdentity = source["isIdentity"];
+	    }
+	}
 	export class ConnectionResult {
 	    success: boolean;
 	    message: string;
@@ -353,6 +373,7 @@ export namespace models {
 	    total: number;
 	    counts: GridCounts;
 	    connected: boolean;
+	    columns?: ColumnDefinition[];
 	
 	    static createFrom(source: any = {}) {
 	        return new GridQueryResult(source);
@@ -364,6 +385,7 @@ export namespace models {
 	        this.total = source["total"];
 	        this.counts = this.convertValues(source["counts"], GridCounts);
 	        this.connected = source["connected"];
+	        this.columns = this.convertValues(source["columns"], ColumnDefinition);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

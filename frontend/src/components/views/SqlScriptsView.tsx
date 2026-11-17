@@ -16,6 +16,7 @@ import {
   Sliders,
   Package,
   ShoppingCart,
+  Trash2,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../ui/card';
 import { Button } from '../ui/button';
@@ -65,6 +66,11 @@ export const SqlScriptsView: React.FC<SqlScriptsViewProps> = ({
   const [activeViewingSlot, setActiveViewingSlot] = useState<SqlScriptSlot | null>(null);
   const [editorContent, setEditorContent] = useState('');
   const [copied, setCopied] = useState(false);
+
+  // Staging table drop options
+  const [dropBeforeExecute, setDropBeforeExecute] = useState<boolean>(false);
+  const [dropModalOpen, setDropModalOpen] = useState<boolean>(false);
+  const [isDropping, setIsDropping] = useState<boolean>(false);
 
   // Sync with prop when external domain changes
   useEffect(() => {
@@ -181,8 +187,8 @@ export const SqlScriptsView: React.FC<SqlScriptsViewProps> = ({
     }
   };
 
-  // Execute Table Creation script explicitly
-  const handleExecuteCreateTable = async () => {
+  // Execute Table Creation script explicitly with optional drop-first
+  const handleExecuteCreateTable = async (dropFirst = dropBeforeExecute) => {
     if (!dbConnected) {
       onOpenDbConfig();
       return;
@@ -191,7 +197,7 @@ export const SqlScriptsView: React.FC<SqlScriptsViewProps> = ({
     setExecutingSlot('create_table');
     setExecutionMessage(null);
     try {
-      const res = await dbClient.executeCreateTable(activeDomain);
+      const res = await dbClient.executeCreateTable(activeDomain, dropFirst);
       setExecutionMessage({
         slot: 'create_table',
         type: res.success ? 'success' : 'error',
@@ -208,6 +214,37 @@ export const SqlScriptsView: React.FC<SqlScriptsViewProps> = ({
       });
     } finally {
       setExecutingSlot(null);
+    }
+  };
+
+  // Directly drop staging table
+  const handleDropStagingTable = async () => {
+    if (!dbConnected) {
+      onOpenDbConfig();
+      return;
+    }
+
+    setIsDropping(true);
+    setExecutionMessage(null);
+    try {
+      const res = await dbClient.dropStagingTable(activeDomain);
+      setExecutionMessage({
+        slot: 'create_table',
+        type: res.success ? 'success' : 'error',
+        text: res.message,
+      });
+      setDropModalOpen(false);
+      if (res.success && onRefreshData) {
+        onRefreshData();
+      }
+    } catch (err: any) {
+      setExecutionMessage({
+        slot: 'create_table',
+        type: 'error',
+        text: `Failed to drop table: ${err.message}`,
+      });
+    } finally {
+      setIsDropping(false);
     }
   };
 
@@ -528,18 +565,45 @@ export const SqlScriptsView: React.FC<SqlScriptsViewProps> = ({
                   </div>
 
                   {slot === 'create_table' && (
-                    <Button
-                      size="sm"
-                      onClick={handleExecuteCreateTable}
-                      disabled={isExecuting}
-                      className="text-xs font-medium h-7 px-2.5"
-                      title={!dbConnected ? 'Connect database to execute table script' : 'Execute table creation DDL script'}
-                    >
-                      <Play className={`w-3 h-3 mr-1 ${isExecuting ? 'animate-spin' : ''}`} />
-                      {isExecuting ? 'Executing...' : !dbConnected ? 'Connect DB' : 'Execute Script'}
-                    </Button>
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => setDropModalOpen(true)}
+                        disabled={!dbConnected || isDropping}
+                        className="text-xs font-normal h-7 px-2 text-rose-600 dark:text-rose-400 hover:bg-rose-500/10 hover:border-rose-500/40 border-rose-500/20"
+                        title="Drop existing staging table directly from SQL Server"
+                      >
+                        <Trash2 className="w-3 h-3 mr-1 text-rose-600 dark:text-rose-400" />
+                        Drop Table
+                      </Button>
+                      <Button
+                        size="sm"
+                        onClick={() => handleExecuteCreateTable(dropBeforeExecute)}
+                        disabled={isExecuting}
+                        className="text-xs font-medium h-7 px-2.5"
+                        title={!dbConnected ? 'Connect database to execute table script' : 'Execute table creation DDL script'}
+                      >
+                        <Play className={`w-3 h-3 mr-1 ${isExecuting ? 'animate-spin' : ''}`} />
+                        {isExecuting ? 'Executing...' : !dbConnected ? 'Connect DB' : 'Execute Script'}
+                      </Button>
+                    </div>
                   )}
                 </div>
+
+                {slot === 'create_table' && (
+                  <div className="flex items-center justify-between border-t border-border/60 pt-2 text-[11px] text-muted-foreground">
+                    <label className="flex items-center gap-1.5 hover:text-foreground cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={dropBeforeExecute}
+                        onChange={(e) => setDropBeforeExecute(e.target.checked)}
+                        className="w-3.5 h-3.5 rounded border-border accent-primary cursor-pointer"
+                      />
+                      <span>Drop existing table before execute (recreates clean table without IF NOT EXISTS)</span>
+                    </label>
+                  </div>
+                )}
               </CardContent>
             </Card>
           );
@@ -603,6 +667,17 @@ export const SqlScriptsView: React.FC<SqlScriptsViewProps> = ({
             </div>
 
             <div className="flex items-center gap-2">
+              {activeViewingSlot === 'create_table' && (
+                <label className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground cursor-pointer select-none mr-2">
+                  <input
+                    type="checkbox"
+                    checked={dropBeforeExecute}
+                    onChange={(e) => setDropBeforeExecute(e.target.checked)}
+                    className="w-3.5 h-3.5 rounded border-border accent-primary cursor-pointer"
+                  />
+                  <span>Drop existing table first</span>
+                </label>
+              )}
               <Button
                 variant="outline"
                 size="sm"
@@ -624,7 +699,7 @@ export const SqlScriptsView: React.FC<SqlScriptsViewProps> = ({
                   size="sm"
                   onClick={async () => {
                     await handleSaveEditorContent();
-                    await handleExecuteCreateTable();
+                    await handleExecuteCreateTable(dropBeforeExecute);
                   }}
                   disabled={executingSlot === 'create_table'}
                   className="text-xs font-medium"
@@ -634,6 +709,50 @@ export const SqlScriptsView: React.FC<SqlScriptsViewProps> = ({
                 </Button>
               )}
             </div>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Drop Staging Table Confirmation Dialog */}
+      <Dialog open={dropModalOpen} onOpenChange={setDropModalOpen}>
+        <DialogContent className="max-w-md bg-card border-border text-foreground p-6">
+          <DialogHeader>
+            <DialogTitle className="text-base font-semibold text-rose-600 dark:text-rose-400 flex items-center gap-2">
+              <Trash2 className="w-4 h-4 text-rose-600 dark:text-rose-400" />
+              Drop Staging Table?
+            </DialogTitle>
+            <DialogDescription className="text-xs text-muted-foreground pt-2 space-y-2">
+              <p>
+                Are you sure you want to drop the physical staging table{' '}
+                <strong className="font-mono text-foreground font-semibold">
+                  {activeDomain === 'sales_orders' ? '[FIN].[KAS_SO_LOADS]' : '[FIN].[KAS_DC_LOADS]'}
+                </strong>{' '}
+                from SQL Server?
+              </p>
+              <p className="text-amber-600 dark:text-amber-400 font-medium bg-amber-500/10 border border-amber-500/20 p-2 rounded text-[11px]">
+                Warning: Any currently staged rows in this table will be deleted. You can recreate the table anytime using "Execute Script".
+              </p>
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="mt-4 flex items-center justify-end gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setDropModalOpen(false)}
+              disabled={isDropping}
+              className="text-xs"
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={handleDropStagingTable}
+              disabled={isDropping}
+              className="text-xs font-semibold bg-rose-600 hover:bg-rose-700 text-white"
+            >
+              {isDropping ? 'Dropping Table...' : 'Confirm Drop Table'}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

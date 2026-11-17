@@ -415,12 +415,21 @@ class DbClient {
     return res as unknown as Record<SqlScriptSlot, SqlScriptInfo>;
   }
 
-  public async executeCreateTable(domain?: LoaderDomain): Promise<{ success: boolean; message: string }> {
+  public async executeCreateTable(domain?: LoaderDomain, dropFirst = false): Promise<{ success: boolean; message: string }> {
     try {
-      const res = await App.EnsureTableExists(domain || 'inventory');
+      const res = await App.EnsureTableExistsWithOptions(domain || 'inventory', dropFirst);
       return { success: res.success, message: res.message };
     } catch (err: any) {
       return { success: false, message: err.message || 'Failed to create table.' };
+    }
+  }
+
+  public async dropStagingTable(domain?: LoaderDomain): Promise<{ success: boolean; message: string }> {
+    try {
+      const res = await App.DropStagingTable(domain || 'inventory');
+      return { success: res.success, message: res.message };
+    } catch (err: any) {
+      return { success: false, message: err.message || 'Failed to drop table.' };
     }
   }
 

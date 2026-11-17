@@ -76,13 +76,39 @@ func (a *App) DisconnectDatabase() bool {
 	return true
 }
 
-func (a *App) EnsureTableExists(domain string) models.TableResult {
-	script := a.scriptsMgr.GetScriptContent(domain, scripts.SlotCreateTable)
-	ok, msg := a.dbManager.EnsureTableExistsWithScript(a.ctx, domain, script)
+func (a *App) DropStagingTable(domain string) models.TableResult {
+	ok, msg := a.dbManager.DropStagingTable(a.ctx, domain)
+	if ok {
+		runtime.EventsEmit(a.ctx, "dcload:countsUpdated", map[string]string{"domain": domain, "op": "drop_table"})
+	}
 	return models.TableResult{
 		Success: ok,
 		Message: msg,
 	}
+}
+
+func (a *App) EnsureTableExistsWithOptions(domain string, dropFirst bool) models.TableResult {
+	if dropFirst {
+		if ok, msg := a.dbManager.DropStagingTable(a.ctx, domain); !ok {
+			return models.TableResult{
+				Success: false,
+				Message: fmt.Sprintf("Failed to drop existing table before create: %s", msg),
+			}
+		}
+	}
+	script := a.scriptsMgr.GetScriptContent(domain, scripts.SlotCreateTable)
+	ok, msg := a.dbManager.EnsureTableExistsWithScript(a.ctx, domain, script)
+	if ok {
+		runtime.EventsEmit(a.ctx, "dcload:countsUpdated", map[string]string{"domain": domain, "op": "create_table"})
+	}
+	return models.TableResult{
+		Success: ok,
+		Message: msg,
+	}
+}
+
+func (a *App) EnsureTableExists(domain string) models.TableResult {
+	return a.EnsureTableExistsWithOptions(domain, false)
 }
 
 func (a *App) ClearStagedData(domain string) models.ClearResult {

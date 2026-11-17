@@ -34,6 +34,7 @@ BEGIN
         [RS_MESSAGE_TEXT] [nvarchar](500) NOT NULL CONSTRAINT [DF_KAS_DC_LOADS_MSG] DEFAULT (''),
         [DC_LICENSE_PLATE_LINE] [int] NOT NULL CONSTRAINT [DF_KAS_DC_LOADS_LINE] DEFAULT (1),
         [UNIT_COST] [decimal](18, 4) NULL,
+        [TEST_COLUMN] [nvarchar](50) NULL,
         [IC_VENDOR_LOT_NUMBER] [nvarchar](50) NOT NULL CONSTRAINT [DF_KAS_DC_LOADS_VEND_LOT] DEFAULT (''),
         [BEST_BEFORE_DATE] [nvarchar](30) NULL,
         [IC_RETEST_DATE] [nvarchar](30) NOT NULL CONSTRAINT [DF_KAS_DC_LOADS_RETEST] DEFAULT (''),
@@ -182,6 +183,7 @@ BEGIN
 
         [SALES_PRICE] [decimal](18,4) NULL,
         [UNIT_SALES] [varchar](10) NULL,
+        [TEST_COLUMN] [varchar](50) NULL,
         [FREIGHT] [decimal](18,4) NULL,
 
         [STATUS_FLAG] [char](1) NULL,
@@ -211,7 +213,14 @@ END
 ELSE
 BEGIN
 
-    PRINT 'Table FIN.KAS_SO_LOADS already exists. No changes made.';
+    -- If table already exists, alter table to add missing columns safely
+    IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[FIN].[KAS_SO_LOADS]') AND name = 'TEST_COLUMN')
+    BEGIN
+        ALTER TABLE [FIN].[KAS_SO_LOADS] ADD [TEST_COLUMN] [varchar](50) NULL;
+        PRINT 'Column TEST_COLUMN added to FIN.KAS_SO_LOADS.';
+    END
+
+    PRINT 'Table FIN.KAS_SO_LOADS already exists. Verified columns.';
 
 END;
 GO
@@ -280,6 +289,27 @@ func (m *Manager) EnsureTableExistsWithScript(ctx context.Context, domain string
 
 	InvalidateSchemaCache(domain)
 	return true, fmt.Sprintf("Staging table %s and dependencies verified and ready.", tableName)
+}
+
+// DropStagingTable drops the physical staging table and invalidates the cached schema.
+func (m *Manager) DropStagingTable(ctx context.Context, domain string) (bool, string) {
+	db, _, err := m.GetDB()
+	if err != nil {
+		return false, err.Error()
+	}
+
+	tableName := "[FIN].[KAS_DC_LOADS]"
+	if domain == "sales_orders" {
+		tableName = "[FIN].[KAS_SO_LOADS]"
+	}
+
+	dropSQL := fmt.Sprintf("IF OBJECT_ID('%s', 'U') IS NOT NULL DROP TABLE %s;", tableName, tableName)
+	if _, err := db.ExecContext(ctx, dropSQL); err != nil {
+		return false, fmt.Sprintf("Failed to drop table %s: %v", tableName, err)
+	}
+
+	InvalidateSchemaCache(domain)
+	return true, fmt.Sprintf("Staging table %s dropped successfully.", tableName)
 }
 
 // ClearStagedData truncates the active staging table and reports count deleted.

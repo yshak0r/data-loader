@@ -33,6 +33,7 @@ BEGIN
 
         [SALES_PRICE] [decimal](18,4) NULL,
         [UNIT_SALES] [varchar](10) NULL,
+        [TEST_COLUMN] [varchar](50) NULL,
         [FREIGHT] [decimal](18,4) NULL,
 
         [STATUS_FLAG] [char](1) NULL,
@@ -62,7 +63,14 @@ END
 ELSE
 BEGIN
 
-    PRINT 'Table FIN.KAS_SO_LOADS already exists. No changes made.';
+    -- If table already exists, alter table to add missing columns safely
+    IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[FIN].[KAS_SO_LOADS]') AND name = 'TEST_COLUMN')
+    BEGIN
+        ALTER TABLE [FIN].[KAS_SO_LOADS] ADD [TEST_COLUMN] [varchar](50) NULL;
+        PRINT 'Column TEST_COLUMN added to FIN.KAS_SO_LOADS.';
+    END
+
+    PRINT 'Table FIN.KAS_SO_LOADS already exists. Verified columns.';
 
 END;
 GO

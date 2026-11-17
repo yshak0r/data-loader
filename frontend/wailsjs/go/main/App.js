@@ -38,8 +38,16 @@ export function DisconnectDatabase() {
   return window['go']['main']['App']['DisconnectDatabase']();
 }
 
+export function DropStagingTable(arg1) {
+  return window['go']['main']['App']['DropStagingTable'](arg1);
+}
+
 export function EnsureTableExists(arg1) {
   return window['go']['main']['App']['EnsureTableExists'](arg1);
+}
+
+export function EnsureTableExistsWithOptions(arg1, arg2) {
+  return window['go']['main']['App']['EnsureTableExistsWithOptions'](arg1, arg2);
 }
 
 export function ExecuteDryRun(arg1) {

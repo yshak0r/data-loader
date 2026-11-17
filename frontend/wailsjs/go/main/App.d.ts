@@ -21,7 +21,11 @@ export function ConnectDatabase(arg1:models.DatabaseConfig):Promise<models.Conne
 
 export function DisconnectDatabase():Promise<boolean>;
 
+export function DropStagingTable(arg1:string):Promise<models.TableResult>;
+
 export function EnsureTableExists(arg1:string):Promise<models.TableResult>;
+
+export function EnsureTableExistsWithOptions(arg1:string,arg2:boolean):Promise<models.TableResult>;
 
 export function ExecuteDryRun(arg1:string):Promise<models.DryRunResult>;
 
