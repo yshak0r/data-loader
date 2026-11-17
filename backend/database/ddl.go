@@ -34,7 +34,6 @@ BEGIN
         [RS_MESSAGE_TEXT] [nvarchar](500) NOT NULL CONSTRAINT [DF_KAS_DC_LOADS_MSG] DEFAULT (''),
         [DC_LICENSE_PLATE_LINE] [int] NOT NULL CONSTRAINT [DF_KAS_DC_LOADS_LINE] DEFAULT (1),
         [UNIT_COST] [decimal](18, 4) NULL,
-        [TEST_COLUMN] [nvarchar](50) NULL,
         [IC_VENDOR_LOT_NUMBER] [nvarchar](50) NOT NULL CONSTRAINT [DF_KAS_DC_LOADS_VEND_LOT] DEFAULT (''),
         [BEST_BEFORE_DATE] [nvarchar](30) NULL,
         [IC_RETEST_DATE] [nvarchar](30) NOT NULL CONSTRAINT [DF_KAS_DC_LOADS_RETEST] DEFAULT (''),
@@ -183,7 +182,6 @@ BEGIN
 
         [SALES_PRICE] [decimal](18,4) NULL,
         [UNIT_SALES] [varchar](10) NULL,
-        [TEST_COLUMN] [varchar](50) NULL,
         [FREIGHT] [decimal](18,4) NULL,
 
         [STATUS_FLAG] [char](1) NULL,
@@ -213,14 +211,7 @@ END
 ELSE
 BEGIN
 
-    -- If table already exists, alter table to add missing columns safely
-    IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[FIN].[KAS_SO_LOADS]') AND name = 'TEST_COLUMN')
-    BEGIN
-        ALTER TABLE [FIN].[KAS_SO_LOADS] ADD [TEST_COLUMN] [varchar](50) NULL;
-        PRINT 'Column TEST_COLUMN added to FIN.KAS_SO_LOADS.';
-    END
-
-    PRINT 'Table FIN.KAS_SO_LOADS already exists. Verified columns.';
+    PRINT 'Table FIN.KAS_SO_LOADS already exists. No changes made.';
 
 END;
 GO
