@@ -353,7 +353,11 @@ func (m *Manager) ListStagingTables(ctx context.Context) ([]models.StagingTableI
 			CAST(ISNULL(p.rows, 0) AS BIGINT) AS row_count,
 			CONVERT(VARCHAR(19), t.create_date, 120) AS create_date,
 			CASE WHEN col_status.column_id IS NOT NULL THEN 1 ELSE 0 END AS has_status_flag
-		FROM sys.tables t
+		FROM (
+			SELECT object_id, schema_id, name, create_date, 'U' AS type, is_ms_shipped FROM sys.tables
+			UNION ALL
+			SELECT object_id, schema_id, name, create_date, 'V' AS type, is_ms_shipped FROM sys.views
+		) t
 		JOIN sys.schemas s ON t.schema_id = s.schema_id
 		LEFT JOIN (
 			SELECT object_id, SUM(CAST(rows AS BIGINT)) AS rows 
@@ -362,7 +366,7 @@ func (m *Manager) ListStagingTables(ctx context.Context) ([]models.StagingTableI
 			GROUP BY object_id
 		) p ON t.object_id = p.object_id
 		LEFT JOIN sys.columns col_status ON t.object_id = col_status.object_id AND col_status.name = 'STATUS_FLAG'
-		WHERE t.type = 'U'
+		WHERE (t.is_ms_shipped = 0 OR s.name NOT IN ('sys', 'INFORMATION_SCHEMA'))
 		  AND t.name NOT IN ('sysdiagrams', 'syssegments', 'sysconstraints')
 		  AND s.name NOT IN (
 			'sys', 'INFORMATION_SCHEMA', 'guest', 'cdc',

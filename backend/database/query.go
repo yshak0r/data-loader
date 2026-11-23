@@ -18,11 +18,13 @@ func (m *Manager) QueryGrid(ctx context.Context, params models.GridQueryParams) 
 	isSO := params.Domain == "sales_orders"
 	tableName, _ := ResolveTableName(params.Domain, params.TargetTable)
 
-	// Ensure the staging table exists if not already present
-	checkQuery := fmt.Sprintf("IF OBJECT_ID('%s', 'U') IS NULL SELECT 0 ELSE SELECT 1", tableName)
-	var tblExists int
-	if err := db.QueryRowContext(ctx, checkQuery).Scan(&tblExists); err == nil && tblExists == 0 {
-		_, _ = m.EnsureTableExists(ctx, params.Domain)
+	// Ensure the standard staging table exists if not already present
+	if strings.TrimSpace(params.TargetTable) == "" {
+		checkQuery := fmt.Sprintf("IF OBJECT_ID('%s') IS NULL SELECT 0 ELSE SELECT 1", tableName)
+		var tblExists int
+		if err := db.QueryRowContext(ctx, checkQuery).Scan(&tblExists); err == nil && tblExists == 0 {
+			_, _ = m.EnsureTableExists(ctx, params.Domain)
+		}
 	}
 
 	// Dynamically inspect existing physical columns from SQL Server
