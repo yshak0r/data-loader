@@ -10,6 +10,7 @@ import {
   Search,
   RefreshCw,
   Database,
+  Filter,
 } from 'lucide-react';
 import { dbClient } from '@/lib/dbClient';
 import { LoaderDomain, StagingTableInfo } from '@/types/dcloader';
@@ -36,6 +37,7 @@ export const TableSwitcher: React.FC<TableSwitcherProps> = ({
   const [tables, setTables] = useState<StagingTableInfo[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [filterSearch, setFilterSearch] = useState('');
+  const [selectedSchema, setSelectedSchema] = useState<string>('ALL');
   const containerRef = useRef<HTMLDivElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -44,7 +46,7 @@ export const TableSwitcher: React.FC<TableSwitcherProps> = ({
   const updateCoords = useCallback(() => {
     if (containerRef.current) {
       const rect = containerRef.current.getBoundingClientRect();
-      const popoverWidth = 288; // w-72 = 18rem = 288px
+      const popoverWidth = 320; // 20rem = 320px
       let left = rect.left;
       if (left + popoverWidth > window.innerWidth - 12) {
         left = window.innerWidth - popoverWidth - 12;
@@ -146,8 +148,33 @@ export const TableSwitcher: React.FC<TableSwitcherProps> = ({
     return tables.filter((t) => t.isStandard);
   }, [tables]);
 
+  // Derive unique schemas with table counts from all discovered custom tables
+  const schemaList = useMemo(() => {
+    const counts = new Map<string, number>();
+    tables.forEach((t) => {
+      if (!t.isStandard && t.schemaName) {
+        counts.set(t.schemaName, (counts.get(t.schemaName) || 0) + 1);
+      }
+    });
+    return Array.from(counts.entries())
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [tables]);
+
+  const totalCustomCount = useMemo(() => {
+    return tables.filter((t) => !t.isStandard).length;
+  }, [tables]);
+
+  // Filter custom tables by selected schema and search term
   const customTables = useMemo(() => {
-    const customs = tables.filter((t) => !t.isStandard);
+    let customs = tables.filter((t) => !t.isStandard);
+
+    if (selectedSchema !== 'ALL') {
+      customs = customs.filter(
+        (t) => t.schemaName.toLowerCase() === selectedSchema.toLowerCase()
+      );
+    }
+
     if (!filterSearch.trim()) return customs;
     const q = filterSearch.toLowerCase().trim();
     return customs.filter(
@@ -156,7 +183,7 @@ export const TableSwitcher: React.FC<TableSwitcherProps> = ({
         t.fullName.toLowerCase().includes(q) ||
         t.schemaName.toLowerCase().includes(q)
     );
-  }, [tables, filterSearch]);
+  }, [tables, selectedSchema, filterSearch]);
 
   // Get active label and icon for trigger button
   const activeLabel = useMemo(() => {
@@ -217,40 +244,96 @@ export const TableSwitcher: React.FC<TableSwitcherProps> = ({
               position: 'fixed',
               top: `${coords.top}px`,
               left: `${coords.left}px`,
-              width: '18rem',
+              width: '20rem',
               zIndex: 99999,
             }}
             className="rounded-lg bg-popover border border-border shadow-2xl overflow-hidden animate-in fade-in-0 zoom-in-95 duration-150 select-none text-foreground"
           >
-            {/* Header & Quick Search */}
-            <div className="p-2 border-b border-border bg-muted/40">
-              <div className="flex items-center justify-between pb-1.5 px-0.5">
-                <span className="text-[10px] font-semibold tracking-wider text-muted-foreground uppercase">
+            {/* Header: Title, Refresh, Search & Schema Selector */}
+            <div className="p-2 border-b border-border bg-muted/40 space-y-1.5">
+              <div className="flex items-center justify-between px-0.5">
+                <span className="text-[10px] font-semibold tracking-wider text-muted-foreground uppercase flex items-center gap-1.5">
+                  <Database className="w-3 h-3 text-primary" />
                   Staging Tables
                 </span>
                 <button
                   type="button"
                   onClick={fetchTables}
-                  className="text-muted-foreground hover:text-foreground transition-colors p-0.5 rounded"
+                  className="text-muted-foreground hover:text-foreground transition-colors p-0.5 rounded hover:bg-muted"
                   title="Refresh table list"
                 >
                   <RefreshCw className={`w-3 h-3 ${isLoading ? 'animate-spin' : ''}`} />
                 </button>
               </div>
+
+              {/* Search Bar */}
               <div className="relative">
-                <Search className="w-3.5 h-3.5 absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                <Search className="w-3.5 h-3.5 absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
                 <input
                   ref={searchInputRef}
                   type="text"
                   value={filterSearch}
                   onChange={(e) => setFilterSearch(e.target.value)}
-                  placeholder="Search tables..."
+                  placeholder="Search by table or schema..."
                   className="w-full pl-7 pr-2 py-1 text-xs bg-background border border-border rounded-md text-foreground placeholder:text-muted-foreground/60 focus:outline-none focus:ring-1 focus:ring-ring"
                 />
               </div>
+
+              {/* Schema Selection Bar */}
+              {schemaList.length > 0 && (
+                <div className="pt-0.5">
+                  <div className="flex items-center justify-between text-[10px] text-muted-foreground mb-1 px-0.5">
+                    <span className="font-medium flex items-center gap-1">
+                      <Filter className="w-2.5 h-2.5" />
+                      Filter Schema:
+                    </span>
+                    {selectedSchema !== 'ALL' && (
+                      <button
+                        type="button"
+                        onClick={() => setSelectedSchema('ALL')}
+                        className="text-primary hover:underline font-medium text-[10px]"
+                      >
+                        Reset (Show All)
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Schema Pills with Table Counts */}
+                  <div className="flex items-center gap-1 overflow-x-auto pb-0.5 scrollbar-thin">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedSchema('ALL')}
+                      className={`px-2 py-0.5 rounded text-[10px] font-mono font-medium shrink-0 transition-all ${
+                        selectedSchema === 'ALL'
+                          ? 'bg-primary text-primary-foreground shadow-xs font-semibold'
+                          : 'bg-secondary/70 hover:bg-secondary text-muted-foreground hover:text-foreground border border-border/60'
+                      }`}
+                    >
+                      All ({totalCustomCount})
+                    </button>
+                    {schemaList.map((s) => {
+                      const isActive = selectedSchema.toLowerCase() === s.name.toLowerCase();
+                      return (
+                        <button
+                          key={s.name}
+                          type="button"
+                          onClick={() => setSelectedSchema(s.name)}
+                          className={`px-2 py-0.5 rounded text-[10px] font-mono font-medium shrink-0 transition-all ${
+                            isActive
+                              ? 'bg-indigo-600 text-white shadow-xs font-semibold'
+                              : 'bg-secondary/70 hover:bg-secondary text-muted-foreground hover:text-foreground border border-border/60'
+                          }`}
+                        >
+                          {s.name} ({s.count})
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
 
-            <div className="max-h-64 overflow-y-auto divide-y divide-border/50 py-1">
+            <div className="max-h-72 overflow-y-auto divide-y divide-border/50 py-1">
               {/* Standard Domains Section */}
               <div className="px-1 py-1">
                 <div className="px-2 py-0.5 text-[10px] font-medium text-muted-foreground">Standard Tables</div>
@@ -334,11 +417,38 @@ export const TableSwitcher: React.FC<TableSwitcherProps> = ({
 
               {/* Custom Tables Section */}
               <div className="px-1 py-1">
-                <div className="px-2 py-0.5 text-[10px] font-medium text-muted-foreground">Custom Tables</div>
+                <div className="flex items-center justify-between px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+                  <span>
+                    Custom Tables
+                    {selectedSchema !== 'ALL' && (
+                      <span className="ml-1 text-indigo-400 font-mono font-semibold">
+                        in [{selectedSchema}]
+                      </span>
+                    )}
+                  </span>
+                  <span className="font-mono text-[9px] text-muted-foreground">
+                    {customTables.length} {customTables.length === 1 ? 'table' : 'tables'}
+                  </span>
+                </div>
 
                 {customTables.length === 0 ? (
-                  <div className="px-2 py-3 text-center text-[11px] text-muted-foreground">
-                    {filterSearch ? 'No matching custom tables.' : 'No custom staging tables discovered.'}
+                  <div className="px-2 py-4 text-center text-[11px] text-muted-foreground space-y-1.5">
+                    <div>
+                      {filterSearch
+                        ? `No tables matching "${filterSearch}".`
+                        : selectedSchema !== 'ALL'
+                        ? `No custom tables in schema "${selectedSchema}".`
+                        : 'No custom staging tables discovered.'}
+                    </div>
+                    {selectedSchema !== 'ALL' && (
+                      <button
+                        type="button"
+                        onClick={() => setSelectedSchema('ALL')}
+                        className="text-primary text-xs underline font-medium block mx-auto cursor-pointer"
+                      >
+                        View all schemas ({totalCustomCount} tables)
+                      </button>
+                    )}
                   </div>
                 ) : (
                   customTables.map((t) => {
@@ -365,6 +475,12 @@ export const TableSwitcher: React.FC<TableSwitcherProps> = ({
                               <span className="text-[9px] px-1 py-0.2 rounded bg-muted border border-border text-muted-foreground font-mono shrink-0">
                                 {t.schemaName}
                               </span>
+                              {t.hasStatusFlag && (
+                                <span
+                                  className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0"
+                                  title="Has STATUS_FLAG column"
+                                />
+                              )}
                             </div>
                             <div className="text-[10px] text-muted-foreground font-mono">{t.fullName}</div>
                           </div>
