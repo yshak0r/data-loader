@@ -57,7 +57,7 @@ export const TitleBar: React.FC<TitleBarProps> = ({
   const { theme, toggleTheme } = useTheme();
 
   return (
-    <header className="h-10 bg-card border-b border-border flex items-center justify-between px-3 select-none wails-drag z-50 text-xs shrink-0 overflow-hidden">
+    <header className="h-10 bg-card border-b border-border flex items-center justify-between px-3 select-none wails-drag z-50 text-xs shrink-0">
       {/* Left: App Identity (shrink-0 so never squeezed) */}
       <div className="flex items-center gap-2 shrink-0 wails-no-drag">
         <div className="flex items-center justify-center w-6 h-6 rounded-md bg-secondary border border-border text-foreground shadow-sm">
@@ -76,7 +76,7 @@ export const TitleBar: React.FC<TitleBarProps> = ({
       </div>
 
       {/* Middle: Domain / Custom Table Switcher & Compact Database Status */}
-      <div className="flex items-center justify-center gap-2 flex-1 min-w-0 px-2 wails-no-drag overflow-hidden">
+      <div className="flex items-center justify-center gap-2 flex-1 min-w-0 px-2 wails-no-drag">
         {onSelectCustomTable && onOpenCustomTableDialog ? (
           <TableSwitcher
             currentDomain={domain}

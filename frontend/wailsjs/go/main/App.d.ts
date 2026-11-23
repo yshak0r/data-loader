@@ -49,7 +49,7 @@ export function GetLicenseStatus():Promise<models.LicenseStatus>;
 
 export function GetMachineFingerprint():Promise<string>;
 
-export function ListStagingTables():Promise<models.StagingTableInfo[]>;
+export function ListStagingTables():Promise<Array<models.StagingTableInfo>>;
 
 export function LockOperatorSession():Promise<models.LicenseStatus>;
 
