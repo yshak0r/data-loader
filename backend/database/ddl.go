@@ -2,7 +2,9 @@ package database
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
+	"log"
 	"strings"
 
 	"dc-loader-wails/backend/models"
@@ -348,21 +350,26 @@ func (m *Manager) ListStagingTables(ctx context.Context) ([]models.StagingTableI
 			s.name AS schema_name, 
 			t.name AS table_name,
 			QUOTENAME(s.name) + '.' + QUOTENAME(t.name) AS full_name,
-			ISNULL(p.rows, 0) AS row_count,
+			CAST(ISNULL(p.rows, 0) AS BIGINT) AS row_count,
 			CONVERT(VARCHAR(19), t.create_date, 120) AS create_date,
 			CASE WHEN col_status.column_id IS NOT NULL THEN 1 ELSE 0 END AS has_status_flag
 		FROM sys.tables t
 		JOIN sys.schemas s ON t.schema_id = s.schema_id
 		LEFT JOIN (
-			SELECT object_id, SUM(rows) AS rows 
+			SELECT object_id, SUM(CAST(rows AS BIGINT)) AS rows 
 			FROM sys.partitions 
 			WHERE index_id IN (0, 1) 
 			GROUP BY object_id
 		) p ON t.object_id = p.object_id
 		LEFT JOIN sys.columns col_status ON t.object_id = col_status.object_id AND col_status.name = 'STATUS_FLAG'
-		WHERE t.is_ms_shipped = 0 
-		  AND s.name NOT IN ('sys', 'INFORMATION_SCHEMA', 'guest', 'cdc')
-		  AND s.name NOT LIKE 'db_%'
+		WHERE t.type = 'U'
+		  AND t.name NOT IN ('sysdiagrams', 'syssegments', 'sysconstraints')
+		  AND s.name NOT IN (
+			'sys', 'INFORMATION_SCHEMA', 'guest', 'cdc',
+			'db_owner', 'db_accessadmin', 'db_securityadmin', 'db_ddladmin',
+			'db_backupoperator', 'db_datareader', 'db_datawriter',
+			'db_denydatareader', 'db_denydatawriter'
+		  )
 		ORDER BY 
 			CASE 
 				WHEN t.name = 'KAS_DC_LOADS' THEN 1
@@ -384,12 +391,32 @@ func (m *Manager) ListStagingTables(ctx context.Context) ([]models.StagingTableI
 	foundSo := false
 
 	for rows.Next() {
-		var item models.StagingTableInfo
-		var hasStatus int
-		if err := rows.Scan(&item.SchemaName, &item.TableName, &item.FullName, &item.RowCount, &item.CreateDate, &hasStatus); err != nil {
+		var (
+			schemaName string
+			tableName  string
+			fullName   sql.NullString
+			rowCount   sql.NullInt64
+			createDate sql.NullString
+			hasStatus  sql.NullInt64
+		)
+		if err := rows.Scan(&schemaName, &tableName, &fullName, &rowCount, &createDate, &hasStatus); err != nil {
+			log.Printf("[ListStagingTables] scan warning for row: %v", err)
 			continue
 		}
-		item.HasStatusFlag = (hasStatus == 1)
+
+		resolvedFullName := fullName.String
+		if resolvedFullName == "" {
+			resolvedFullName = fmt.Sprintf("[%s].[%s]", schemaName, tableName)
+		}
+
+		item := models.StagingTableInfo{
+			SchemaName:    schemaName,
+			TableName:     tableName,
+			FullName:      resolvedFullName,
+			RowCount:      int(rowCount.Int64),
+			CreateDate:    createDate.String,
+			HasStatusFlag: (hasStatus.Int64 == 1),
+		}
 
 		if strings.EqualFold(item.TableName, "KAS_DC_LOADS") {
 			item.IsStandard = true
@@ -402,6 +429,11 @@ func (m *Manager) ListStagingTables(ctx context.Context) ([]models.StagingTableI
 		}
 
 		tables = append(tables, item)
+	}
+
+	if err := rows.Err(); err != nil {
+		log.Printf("[ListStagingTables] rows iteration error: %v", err)
+		return nil, fmt.Errorf("error reading staging tables: %w", err)
 	}
 
 	// Always ensure standard staging tables are present in the catalog
