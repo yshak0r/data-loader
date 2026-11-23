@@ -360,7 +360,9 @@ func (m *Manager) ListStagingTables(ctx context.Context) ([]models.StagingTableI
 			GROUP BY object_id
 		) p ON t.object_id = p.object_id
 		LEFT JOIN sys.columns col_status ON t.object_id = col_status.object_id AND col_status.name = 'STATUS_FLAG'
-		WHERE t.is_ms_shipped = 0 AND s.name IN ('FIN', 'dbo')
+		WHERE t.is_ms_shipped = 0 
+		  AND s.name NOT IN ('sys', 'INFORMATION_SCHEMA', 'guest', 'cdc')
+		  AND s.name NOT LIKE 'db_%'
 		ORDER BY 
 			CASE 
 				WHEN t.name = 'KAS_DC_LOADS' THEN 1

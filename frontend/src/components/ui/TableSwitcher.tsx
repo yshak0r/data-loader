@@ -162,7 +162,7 @@ export const TableSwitcher: React.FC<TableSwitcherProps> = ({
   const activeLabel = useMemo(() => {
     if (activeCustomTable) {
       const found = tables.find((t) => t.fullName === activeCustomTable);
-      return found ? found.tableName : activeCustomTable;
+      return found ? found.fullName : activeCustomTable;
     }
     return currentDomain === 'sales_orders' ? 'Sales Orders' : 'DC Inventory';
   }, [activeCustomTable, currentDomain, tables]);
@@ -276,7 +276,9 @@ export const TableSwitcher: React.FC<TableSwitcherProps> = ({
                         <Boxes className="w-3.5 h-3.5 text-sky-500 shrink-0" />
                         <div className="text-left truncate">
                           <div className="font-medium">DC Inventory</div>
-                          <div className="text-[10px] text-muted-foreground font-mono">[FIN].[KAS_DC_LOADS]</div>
+                          <div className="text-[10px] text-muted-foreground font-mono">
+                            {dcMeta ? dcMeta.fullName : '[FIN].[KAS_DC_LOADS]'}
+                          </div>
                         </div>
                       </div>
                       <div className="flex items-center gap-1.5 shrink-0 ml-2">
@@ -312,7 +314,9 @@ export const TableSwitcher: React.FC<TableSwitcherProps> = ({
                         <ShoppingCart className="w-3.5 h-3.5 text-amber-500 shrink-0" />
                         <div className="text-left truncate">
                           <div className="font-medium">Sales Orders</div>
-                          <div className="text-[10px] text-muted-foreground font-mono">[FIN].[KAS_SO_LOADS]</div>
+                          <div className="text-[10px] text-muted-foreground font-mono">
+                            {soMeta ? soMeta.fullName : '[FIN].[KAS_SO_LOADS]'}
+                          </div>
                         </div>
                       </div>
                       <div className="flex items-center gap-1.5 shrink-0 ml-2">
@@ -356,7 +360,12 @@ export const TableSwitcher: React.FC<TableSwitcherProps> = ({
                         <div className="flex items-center gap-2 min-w-0">
                           <Table2 className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
                           <div className="text-left truncate">
-                            <div className="font-medium truncate">{t.tableName}</div>
+                            <div className="flex items-center gap-1.5">
+                              <span className="font-medium truncate">{t.tableName}</span>
+                              <span className="text-[9px] px-1 py-0.2 rounded bg-muted border border-border text-muted-foreground font-mono shrink-0">
+                                {t.schemaName}
+                              </span>
+                            </div>
                             <div className="text-[10px] text-muted-foreground font-mono">{t.fullName}</div>
                           </div>
                         </div>
