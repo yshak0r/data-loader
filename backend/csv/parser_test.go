@@ -241,3 +241,53 @@ func TestFormatColumnValue(t *testing.T) {
 		t.Errorf("expected nullable date with empty input to be nil, got %v", val4)
 	}
 }
+
+func TestGenericCsvBinding(t *testing.T) {
+	targetCols := []models.ColumnDefinition{
+		{Name: "COMPANY_CODE", DataType: "varchar", MaxLength: 10},
+		{Name: "PO_NUMBER", DataType: "varchar", MaxLength: 30},
+		{Name: "VENDOR_CODE", DataType: "varchar", MaxLength: 20},
+		{Name: "UNIT_PRICE", DataType: "decimal"},
+		{Name: "DELIVERY_DATE", DataType: "datetime"},
+		{Name: "NOTES", DataType: "varchar", MaxLength: 200, IsNullable: true},
+	}
+
+	header := []string{"PO NUMBER", "Vendor Code", "Unit Price", "Delivery Date", "Notes"}
+	hMap := buildHeaderMap(header)
+
+	bindings := bindGenericColumns(targetCols, hMap, "ROSS_CORP", "DIV1")
+	bMap := make(map[string]columnBinding)
+	for _, b := range bindings {
+		bMap[b.Col.Name] = b
+	}
+
+	// Verify COMPANY_CODE system default
+	if !bMap["COMPANY_CODE"].IsSystem || bMap["COMPANY_CODE"].SystemVal != "ROSS_CORP" {
+		t.Errorf("expected COMPANY_CODE to be system default ROSS_CORP, got %+v", bMap["COMPANY_CODE"])
+	}
+
+	// Verify PO_NUMBER binds to index 0
+	if bMap["PO_NUMBER"].CsvIndex != 0 {
+		t.Errorf("expected PO_NUMBER at index 0, got %d", bMap["PO_NUMBER"].CsvIndex)
+	}
+
+	// Verify VENDOR_CODE binds to index 1
+	if bMap["VENDOR_CODE"].CsvIndex != 1 {
+		t.Errorf("expected VENDOR_CODE at index 1, got %d", bMap["VENDOR_CODE"].CsvIndex)
+	}
+
+	// Verify UNIT_PRICE binds to index 2
+	if bMap["UNIT_PRICE"].CsvIndex != 2 {
+		t.Errorf("expected UNIT_PRICE at index 2, got %d", bMap["UNIT_PRICE"].CsvIndex)
+	}
+
+	// Verify DELIVERY_DATE binds to index 3
+	if bMap["DELIVERY_DATE"].CsvIndex != 3 {
+		t.Errorf("expected DELIVERY_DATE at index 3, got %d", bMap["DELIVERY_DATE"].CsvIndex)
+	}
+
+	// Verify NOTES binds to index 4
+	if bMap["NOTES"].CsvIndex != 4 {
+		t.Errorf("expected NOTES at index 4, got %d", bMap["NOTES"].CsvIndex)
+	}
+}

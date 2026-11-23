@@ -92,15 +92,25 @@ func UploadCsv(
 		targetCols = append(targetCols, c)
 	}
 
-	if domain == "sales_orders" {
+	fullName, bareName := database.ResolveTableName(domain, "")
+
+	if domain == "sales_orders" || strings.EqualFold(bareName, "KAS_SO_LOADS") {
 		_, _ = db.ExecContext(ctx, "IF OBJECT_ID('[FIN].[KAS_SO_LOADS]', 'U') IS NOT NULL TRUNCATE TABLE [FIN].[KAS_SO_LOADS];")
 		total, err := uploadSoCsv(ctx, db, file, targetCols, companyCode, division, onProgress)
 		return "sales_orders", total, err
 	}
 
-	_, _ = db.ExecContext(ctx, "IF OBJECT_ID('[FIN].[KAS_DC_LOADS]', 'U') IS NOT NULL TRUNCATE TABLE [FIN].[KAS_DC_LOADS];")
-	total, err := uploadDcCsv(ctx, db, file, targetCols, companyCode, onProgress)
-	return "inventory", total, err
+	if domain == "inventory" || strings.EqualFold(bareName, "KAS_DC_LOADS") {
+		_, _ = db.ExecContext(ctx, "IF OBJECT_ID('[FIN].[KAS_DC_LOADS]', 'U') IS NOT NULL TRUNCATE TABLE [FIN].[KAS_DC_LOADS];")
+		total, err := uploadDcCsv(ctx, db, file, targetCols, companyCode, onProgress)
+		return "inventory", total, err
+	}
+
+	// Universal Generic CSV Upload for custom staging tables
+	truncateSQL := fmt.Sprintf("IF OBJECT_ID('%s', 'U') IS NOT NULL TRUNCATE TABLE %s;", fullName, fullName)
+	_, _ = db.ExecContext(ctx, truncateSQL)
+	total, err := uploadGenericCsv(ctx, db, file, fullName, targetCols, companyCode, division, onProgress)
+	return domain, total, err
 }
 
 type columnBinding struct {
@@ -564,6 +574,155 @@ func uploadDcCsv(
 
 	if len(rowsBatch) > 0 {
 		if err := insertDynamicBatch(ctx, db, "[FIN].[KAS_DC_LOADS]", targetCols, rowsBatch); err != nil {
+			return totalLoaded, err
+		}
+		totalLoaded += len(rowsBatch)
+		if onProgress != nil {
+			onProgress(totalLoaded)
+		}
+	}
+
+	return totalLoaded, nil
+}
+
+func bindGenericColumns(
+	targetCols []models.ColumnDefinition,
+	headerMap map[string]int,
+	companyCode string,
+	division string,
+) []columnBinding {
+	bindings := make([]columnBinding, len(targetCols))
+
+	for i, col := range targetCols {
+		upperName := strings.ToUpper(col.Name)
+		b := columnBinding{
+			Col:      col,
+			CsvIndex: -1,
+		}
+
+		switch upperName {
+		case "COMPANY_CODE":
+			if idx, ok := headerMap[cleanHeaderKey("COMPANY_CODE")]; ok {
+				b.CsvIndex = idx
+			} else {
+				b.IsSystem = true
+				b.SystemVal = companyCode
+			}
+		case "DIVISION":
+			if idx, ok := headerMap[cleanHeaderKey("DIVISION")]; ok {
+				b.CsvIndex = idx
+			} else {
+				b.IsSystem = true
+				b.SystemVal = division
+			}
+		case "STATUS_FLAG":
+			if idx, ok := headerMap[cleanHeaderKey("STATUS_FLAG")]; ok {
+				b.CsvIndex = idx
+			} else {
+				b.IsSystem = true
+				b.SystemVal = " "
+			}
+		default:
+			if headerMap != nil {
+				cleanName := cleanHeaderKey(col.Name)
+				if idx, ok := headerMap[cleanName]; ok {
+					b.CsvIndex = idx
+				}
+			}
+		}
+
+		bindings[i] = b
+	}
+
+	return bindings
+}
+
+func uploadGenericCsv(
+	ctx context.Context,
+	db *sql.DB,
+	r io.Reader,
+	tableName string,
+	targetCols []models.ColumnDefinition,
+	companyCode string,
+	division string,
+	onProgress ProgressCallback,
+) (int, error) {
+	if len(targetCols) == 0 {
+		return 0, fmt.Errorf("staging table %s has no insertable columns", tableName)
+	}
+
+	reader := csv.NewReader(r)
+	reader.LazyQuotes = true
+	reader.FieldsPerRecord = -1
+	reader.TrimLeadingSpace = true
+
+	var headerMap map[string]int
+	var bindings []columnBinding
+	var rowsBatch [][]any
+
+	batchSize := 90
+	if len(targetCols) > 0 {
+		batchSize = 2000 / len(targetCols)
+		if batchSize < 10 {
+			batchSize = 10
+		} else if batchSize > 150 {
+			batchSize = 150
+		}
+	}
+	totalLoaded := 0
+
+	for {
+		row, err := reader.Read()
+		if err == io.EOF {
+			break
+		}
+		if err != nil || len(row) == 0 {
+			continue
+		}
+
+		firstRaw := strings.TrimSpace(row[0])
+		isComment := strings.HasPrefix(firstRaw, "!") || strings.HasPrefix(firstRaw, "#")
+		if isComment {
+			continue
+		}
+
+		if headerMap == nil {
+			headerMap = buildHeaderMap(row)
+			bindings = bindGenericColumns(targetCols, headerMap, companyCode, division)
+			continue
+		}
+
+		// Format row according to targetCols
+		rowVals := make([]any, len(bindings))
+		for i, b := range bindings {
+			if b.IsSystem {
+				rowVals[i] = b.SystemVal
+				continue
+			}
+
+			raw := ""
+			if b.CsvIndex >= 0 && b.CsvIndex < len(row) {
+				raw = strings.TrimSpace(row[b.CsvIndex])
+			}
+
+			rowVals[i] = formatColumnValue(b.Col, raw)
+		}
+
+		rowsBatch = append(rowsBatch, rowVals)
+		if len(rowsBatch) >= batchSize {
+			if err := insertDynamicBatch(ctx, db, tableName, targetCols, rowsBatch); err != nil {
+				return totalLoaded, err
+			}
+			totalLoaded += len(rowsBatch)
+			if onProgress != nil {
+				onProgress(totalLoaded)
+			}
+			rowsBatch = rowsBatch[:0]
+		}
+	}
+
+	if len(rowsBatch) > 0 {
+		if err := insertDynamicBatch(ctx, db, tableName, targetCols, rowsBatch); err != nil {
 			return totalLoaded, err
 		}
 		totalLoaded += len(rowsBatch)
