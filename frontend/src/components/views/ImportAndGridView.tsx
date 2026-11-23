@@ -53,6 +53,7 @@ interface ImportAndGridViewProps {
   dbDatabase: string;
   lastStagedInfo: string | null;
   domain?: LoaderDomain;
+  activeTargetTable?: string | null;
   columnFilters?: Record<string, string>;
   onColumnFilterChange?: (columnName: string, value: string | null) => void;
   onClearAllColumnFilters?: () => void;
@@ -88,6 +89,7 @@ export const ImportAndGridView: React.FC<ImportAndGridViewProps> = ({
   dbDatabase,
   lastStagedInfo,
   domain = 'inventory',
+  activeTargetTable,
   columnFilters = {},
   onColumnFilterChange,
   onClearAllColumnFilters,
@@ -252,6 +254,9 @@ export const ImportAndGridView: React.FC<ImportAndGridViewProps> = ({
     return Object.entries(columnFilters).filter(([_, v]) => Boolean(v && v.trim() !== ''));
   }, [columnFilters]);
 
+  const currentTableName =
+    activeTargetTable || (domain === 'sales_orders' ? '[FIN].[KAS_SO_LOADS]' : '[FIN].[KAS_DC_LOADS]');
+
   const renderHeaderWithFilter = (title: string, colName: string, customWidthClass?: string) => (
     <TableHead className={customWidthClass || 'whitespace-nowrap px-3 font-medium'}>
       <div className="flex items-center justify-between gap-1">
@@ -260,7 +265,8 @@ export const ImportAndGridView: React.FC<ImportAndGridViewProps> = ({
           <ColumnHeaderFilter
             columnName={colName}
             columnTitle={title}
-            domain={domain}
+            domain={activeTargetTable ? undefined : domain}
+            targetTable={activeTargetTable || undefined}
             activeFilter={columnFilters?.[colName]}
             onFilterChange={onColumnFilterChange}
           />
@@ -351,16 +357,18 @@ export const ImportAndGridView: React.FC<ImportAndGridViewProps> = ({
             {isUploading ? 'Uploading...' : dbConnected ? 'Upload CSV' : 'Connect DB'}
           </Button>
 
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={dbConnected ? onRunDryRun : onOpenDbConfig}
-            disabled={isLoading || isUploading || counts.total === 0 || !dbConnected}
-            className="h-8 text-xs font-medium shadow-sm"
-          >
-            <Zap className="w-3.5 h-3.5 mr-1 text-amber-400" />
-            Run Dry Run (SQL)
-          </Button>
+          {!activeTargetTable && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={dbConnected ? onRunDryRun : onOpenDbConfig}
+              disabled={isLoading || isUploading || counts.total === 0 || !dbConnected}
+              className="h-8 text-xs font-medium shadow-sm"
+            >
+              <Zap className="w-3.5 h-3.5 mr-1 text-amber-400" />
+              Run Dry Run (SQL)
+            </Button>
+          )}
 
           {onOpenClearStagedDialog && (
             <Button
@@ -369,7 +377,7 @@ export const ImportAndGridView: React.FC<ImportAndGridViewProps> = ({
               onClick={dbConnected ? onOpenClearStagedDialog : onOpenDbConfig}
               disabled={isLoading || isUploading || counts.total === 0 || !dbConnected}
               className="h-8 text-xs font-medium shadow-sm text-rose-600 dark:text-rose-400 border-rose-300 dark:border-rose-500/30 hover:bg-rose-50 dark:hover:bg-rose-950/30"
-              title={`Clear all staged records from ${domain === 'sales_orders' ? '[FIN].[KAS_SO_LOADS]' : '[FIN].[KAS_DC_LOADS]'}`}
+              title={`Clear all staged records from ${currentTableName}`}
             >
               <Trash2 className="w-3.5 h-3.5 mr-1 text-rose-500" />
               Clear Staging
@@ -388,7 +396,7 @@ export const ImportAndGridView: React.FC<ImportAndGridViewProps> = ({
               }`}
             />
             <span className="font-mono font-medium text-[11px] text-foreground">
-              {dbConnected ? `${dbHost} / [${dbDatabase}].${domain === 'sales_orders' ? '[FIN].[KAS_SO_LOADS]' : '[FIN].[KAS_DC_LOADS]'}` : 'DB OFFLINE'}
+              {dbConnected ? `${dbHost} / [${dbDatabase}].${currentTableName}` : 'DB OFFLINE'}
             </span>
             {fileName && (
               <>
@@ -424,60 +432,72 @@ export const ImportAndGridView: React.FC<ImportAndGridViewProps> = ({
             />
           </div>
 
-          {/* Status filter buttons */}
-          <div className="flex items-center rounded-md bg-secondary/80 p-0.5 border border-border text-xs">
-            <button
-              onClick={() => onStatusFilterChange('ALL')}
-              className={`px-2.5 py-1 rounded-sm text-xs font-medium transition-all ${
-                statusFilter === 'ALL'
-                  ? 'bg-background text-foreground shadow-sm'
-                  : 'text-muted-foreground hover:text-foreground'
-              }`}
-            >
-              All ({counts.total})
-            </button>
-            <button
-              onClick={() => onStatusFilterChange('V')}
-              className={`px-2.5 py-1 rounded-sm text-xs font-medium transition-all ${
-                statusFilter === 'V'
-                  ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30'
-                  : 'text-muted-foreground hover:text-foreground'
-              }`}
-            >
-              Valid ({counts.valid})
-            </button>
-            <button
-              onClick={() => onStatusFilterChange('E')}
-              className={`px-2.5 py-1 rounded-sm text-xs font-medium transition-all ${
-                statusFilter === 'E'
-                  ? 'bg-rose-500/15 text-rose-700 dark:text-rose-400 border border-rose-500/30'
-                  : 'text-muted-foreground hover:text-foreground'
-              }`}
-            >
-              Errors ({counts.error})
-            </button>
-            <button
-              onClick={() => onStatusFilterChange('L')}
-              className={`px-2.5 py-1 rounded-sm text-xs font-medium transition-all ${
-                statusFilter === 'L' || statusFilter === 'P'
-                  ? 'bg-secondary text-foreground font-semibold border border-border'
-                  : 'text-muted-foreground hover:text-foreground'
-              }`}
-            >
-              Loaded ({counts.loaded})
-            </button>
-            <button
-              onClick={() => onStatusFilterChange('F')}
-              className={`px-2.5 py-1 rounded-sm text-xs font-medium transition-all ${
-                statusFilter === 'F'
-                  ? 'bg-amber-500/15 text-amber-700 dark:text-amber-400 border border-amber-500/30 font-semibold'
-                  : 'text-muted-foreground hover:text-foreground'
-              }`}
-              title="Load Failed — uncommitted or failed during loader (F)"
-            >
-              Failed ({counts.failed || 0})
-            </button>
-          </div>
+          {/* Status filter buttons or Custom Total Count */}
+          {activeTargetTable ? (
+            <div className="flex items-center gap-1.5 px-3 py-1 rounded-md bg-secondary/80 border border-border text-xs font-mono text-muted-foreground">
+              <span>Total Records:</span>
+              <span className="font-semibold text-foreground">{counts.total.toLocaleString()}</span>
+              {totalRows !== counts.total && (
+                <span className="text-sky-600 dark:text-sky-400 font-semibold ml-1">
+                  ({totalRows.toLocaleString()} filtered)
+                </span>
+              )}
+            </div>
+          ) : (
+            <div className="flex items-center rounded-md bg-secondary/80 p-0.5 border border-border text-xs">
+              <button
+                onClick={() => onStatusFilterChange('ALL')}
+                className={`px-2.5 py-1 rounded-sm text-xs font-medium transition-all ${
+                  statusFilter === 'ALL'
+                    ? 'bg-background text-foreground shadow-sm'
+                    : 'text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                All ({counts.total})
+              </button>
+              <button
+                onClick={() => onStatusFilterChange('V')}
+                className={`px-2.5 py-1 rounded-sm text-xs font-medium transition-all ${
+                  statusFilter === 'V'
+                    ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30'
+                    : 'text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                Valid ({counts.valid})
+              </button>
+              <button
+                onClick={() => onStatusFilterChange('E')}
+                className={`px-2.5 py-1 rounded-sm text-xs font-medium transition-all ${
+                  statusFilter === 'E'
+                    ? 'bg-rose-500/15 text-rose-700 dark:text-rose-400 border border-rose-500/30'
+                    : 'text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                Errors ({counts.error})
+              </button>
+              <button
+                onClick={() => onStatusFilterChange('L')}
+                className={`px-2.5 py-1 rounded-sm text-xs font-medium transition-all ${
+                  statusFilter === 'L' || statusFilter === 'P'
+                    ? 'bg-secondary text-foreground font-semibold border border-border'
+                    : 'text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                Loaded ({counts.loaded})
+              </button>
+              <button
+                onClick={() => onStatusFilterChange('F')}
+                className={`px-2.5 py-1 rounded-sm text-xs font-medium transition-all ${
+                  statusFilter === 'F'
+                    ? 'bg-amber-500/15 text-amber-700 dark:text-amber-400 border border-amber-500/30 font-semibold'
+                    : 'text-muted-foreground hover:text-foreground'
+                }`}
+                title="Load Failed — uncommitted or failed during loader (F)"
+              >
+                Failed ({counts.failed || 0})
+              </button>
+            </div>
+          )}
 
           {/* Refresh Grid */}
           <Button
@@ -593,7 +613,7 @@ export const ImportAndGridView: React.FC<ImportAndGridViewProps> = ({
                 SQL Server Connection Required
               </h3>
               <p className="text-xs text-muted-foreground leading-relaxed">
-                The desktop app does not stage data in local memory. All CSV records, dry run validations, and loading operations are executed directly against Microsoft SQL Server in table <code className="text-foreground font-mono">{domain === 'sales_orders' ? '[FIN].[KAS_SO_LOADS]' : '[FIN].[KAS_DC_LOADS]'}</code>.
+                The desktop app does not stage data in local memory. All CSV records, dry run validations, and loading operations are executed directly against Microsoft SQL Server in table <code className="text-foreground font-mono">{currentTableName}</code>.
               </p>
             </div>
             <Button
@@ -612,12 +632,12 @@ export const ImportAndGridView: React.FC<ImportAndGridViewProps> = ({
             </div>
             <div className="max-w-md space-y-1">
               <h3 className="text-base font-semibold text-foreground">
-                {counts.total === 0 ? `No Data in ${domain === 'sales_orders' ? '[FIN].[KAS_SO_LOADS]' : '[FIN].[KAS_DC_LOADS]'}` : 'No Records Match Filter'}
+                {counts.total === 0 ? `No Data in ${currentTableName}` : 'No Records Match Filter'}
               </h3>
               <p className="text-xs text-muted-foreground">
                 {counts.total === 0
-                  ? `SQL Server connected at ${dbHost} [${dbDatabase}]. Open a Ross ERP ${domain === 'sales_orders' ? 'Sales Order' : 'DC loader'} CSV file to bulk-load records into ${domain === 'sales_orders' ? '[FIN].[KAS_SO_LOADS]' : '[FIN].[KAS_DC_LOADS]'}.`
-                  : `No rows found in ${domain === 'sales_orders' ? '[FIN].[KAS_SO_LOADS]' : '[FIN].[KAS_DC_LOADS]'} matching status filter '${statusFilter}' or search query '${searchQuery}'.`}
+                  ? `SQL Server connected at ${dbHost} [${dbDatabase}]. Open a CSV file to bulk-load records into ${currentTableName}.`
+                  : `No rows found in ${currentTableName} matching status filter '${statusFilter}' or search query '${searchQuery}'.`}
               </p>
             </div>
             {counts.total === 0 && (
@@ -630,6 +650,54 @@ export const ImportAndGridView: React.FC<ImportAndGridViewProps> = ({
               </Button>
             )}
           </div>
+        ) : activeTargetTable ? (
+          /* Generic Custom Table View */
+          <Table>
+            <TableHeader>
+              <TableRow className="border-b border-border/80 text-[11px] whitespace-nowrap bg-muted/20">
+                <TableHead className="w-12 text-center text-muted-foreground font-mono">#</TableHead>
+                {allDiscoveredCols.map((c) =>
+                  renderHeaderWithFilter(formatColumnTitle(c.name), c.name)
+                )}
+              </TableRow>
+            </TableHeader>
+            <TableBody className="text-xs">
+              {rows.map((r: any, idx: number) => {
+                const rowNum = (currentPage - 1) * pageSize + idx + 1;
+                const statusVal = r.STATUS_FLAG ?? r.status_flag;
+                const isError = statusVal === 'E';
+                const isValid = statusVal === 'V';
+                const isLoaded = statusVal === 'L';
+
+                return (
+                  <TableRow
+                    key={r.ID ?? r.GEM_DBKEY ?? idx}
+                    className={`transition-colors font-mono text-[11px] hover:bg-secondary/40 ${
+                      isError
+                        ? 'bg-rose-500/5 hover:bg-rose-500/10'
+                        : isValid
+                        ? 'bg-emerald-500/5 hover:bg-emerald-500/10'
+                        : isLoaded
+                        ? 'bg-sky-500/5 hover:bg-sky-500/10'
+                        : ''
+                    }`}
+                  >
+                    <TableCell className="w-12 text-center text-muted-foreground font-mono text-[10px]">
+                      {rowNum}
+                    </TableCell>
+                    {allDiscoveredCols.map((c) => {
+                      const val = r[c.name.toUpperCase()] ?? r[c.name] ?? r[c.name.toLowerCase()];
+                      return (
+                        <TableCell key={c.name} className="px-3 whitespace-nowrap">
+                          {renderDynamicCell(val, c)}
+                        </TableCell>
+                      );
+                    })}
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
         ) : domain === 'sales_orders' ? (
           /* Sales Orders Table View */
           <Table>

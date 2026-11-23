@@ -10,9 +10,10 @@ import { SqlScriptsView } from '@/components/views/SqlScriptsView';
 import { ConnectionDialog } from '@/components/modals/ConnectionDialog';
 import { CleanDatabaseDialog } from '@/components/modals/CleanDatabaseDialog';
 import { ClearStagedDataDialog } from '@/components/modals/ClearStagedDataDialog';
+import { CustomTableDialog } from '@/components/modals/CustomTableDialog';
 import { ActivationModal } from '@/components/modals/ActivationModal';
 import { OperatorLoginModal } from '@/components/modals/OperatorLoginModal';
-import { GridCounts, DatabaseConfig, LoaderDomain, ColumnDefinition } from '@/types/dcloader';
+import { GridCounts, DatabaseConfig, LoaderDomain, ColumnDefinition, StagingTableInfo } from '@/types/dcloader';
 import { LicenseStatus } from '@/types/security';
 import { dbClient } from '@/lib/dbClient';
 import { EventsOn, EventsOff } from '@/../wailsjs/runtime/runtime';
@@ -21,6 +22,7 @@ export const App: React.FC = () => {
   const [currentTab, setCurrentTab] = useState<NavTab>('dashboard');
   const [fileName, setFileName] = useState<string>('');
   const [domain, setDomain] = useState<LoaderDomain>('inventory');
+  const [activeCustomTable, setActiveCustomTable] = useState<string | null>(null);
 
   // SQL Server Grid & Table State — holds either DC or SO rows depending on domain
   const [gridRows, setGridRows] = useState<any[]>([]);
@@ -48,6 +50,7 @@ export const App: React.FC = () => {
   const [isDbConfigOpen, setIsDbConfigOpen] = useState(false);
   const [isCleanDialogOpen, setIsCleanDialogOpen] = useState(false);
   const [isClearStagedDialogOpen, setIsClearStagedDialogOpen] = useState(false);
+  const [isCustomTableDialogOpen, setIsCustomTableDialogOpen] = useState(false);
   const [isActivationOpen, setIsActivationOpen] = useState(false);
   const [isOperatorLoginOpen, setIsOperatorLoginOpen] = useState(false);
   const [licenseStatus, setLicenseStatus] = useState<LicenseStatus>({
@@ -77,14 +80,15 @@ export const App: React.FC = () => {
     };
   });
 
-  // Query staging table directly from SQL Server (domain-aware)
+  // Query staging table directly from SQL Server (domain-aware or custom table)
   const refreshGridData = useCallback(async (
     page = currentPage,
     size = pageSize,
     filter = statusFilter,
     search = searchQuery,
     targetDomain = domain,
-    activeColFilters = columnFilters
+    activeColFilters = columnFilters,
+    targetTable = activeCustomTable
   ) => {
     setIsLoading(true);
     try {
@@ -93,7 +97,8 @@ export const App: React.FC = () => {
         pageSize: size,
         statusFilter: filter,
         search,
-        domain: targetDomain,
+        domain: targetTable ? undefined : targetDomain,
+        targetTable: targetTable || undefined,
         columnFilters: activeColFilters,
       });
       setDbConnected(res.connected);
@@ -113,7 +118,7 @@ export const App: React.FC = () => {
     } finally {
       setIsLoading(false);
     }
-  }, [currentPage, pageSize, statusFilter, searchQuery, domain, columnFilters]);
+  }, [currentPage, pageSize, statusFilter, searchQuery, domain, columnFilters, activeCustomTable]);
 
   const handleColumnFilterChange = useCallback((columnName: string, value: string | null) => {
     setColumnFilters((prev) => {
@@ -124,18 +129,19 @@ export const App: React.FC = () => {
         updated[columnName] = value.trim();
       }
       setCurrentPage(1);
-      refreshGridData(1, pageSize, statusFilter, searchQuery, domain, updated);
+      refreshGridData(1, pageSize, statusFilter, searchQuery, domain, updated, activeCustomTable);
       return updated;
     });
-  }, [pageSize, statusFilter, searchQuery, domain, refreshGridData]);
+  }, [pageSize, statusFilter, searchQuery, domain, activeCustomTable, refreshGridData]);
 
   const handleClearAllColumnFilters = useCallback(() => {
     setColumnFilters({});
     setCurrentPage(1);
-    refreshGridData(1, pageSize, statusFilter, searchQuery, domain, {});
-  }, [pageSize, statusFilter, searchQuery, domain, refreshGridData]);
+    refreshGridData(1, pageSize, statusFilter, searchQuery, domain, {}, activeCustomTable);
+  }, [pageSize, statusFilter, searchQuery, domain, activeCustomTable, refreshGridData]);
 
   const handleDomainChange = useCallback((newDomain: LoaderDomain) => {
+    setActiveCustomTable(null);
     setDomain(newDomain);
     setCurrentPage(1);
     setStatusFilter('ALL');
@@ -144,7 +150,7 @@ export const App: React.FC = () => {
     setFileName('');
     setLastStagedInfo(null);
     if (dbConnected) {
-      refreshGridData(1, pageSize, 'ALL', '', newDomain, {});
+      refreshGridData(1, pageSize, 'ALL', '', newDomain, {}, null);
     } else {
       setGridRows([]);
       setTotalRows(0);
@@ -152,6 +158,24 @@ export const App: React.FC = () => {
       setCounts({ total: 0, valid: 0, error: 0, loaded: 0, failed: 0 });
     }
   }, [dbConnected, pageSize, refreshGridData]);
+
+  const handleCustomTableSelect = useCallback((table: StagingTableInfo) => {
+    setActiveCustomTable(table.fullName);
+    setCurrentPage(1);
+    setStatusFilter('ALL');
+    setSearchQuery('');
+    setColumnFilters({});
+    setFileName('');
+    setLastStagedInfo(null);
+    if (dbConnected) {
+      refreshGridData(1, pageSize, 'ALL', '', domain, {}, table.fullName);
+    } else {
+      setGridRows([]);
+      setTotalRows(0);
+      setColumns([]);
+      setCounts({ total: 0, valid: 0, error: 0, loaded: 0, failed: 0 });
+    }
+  }, [dbConnected, pageSize, domain, refreshGridData]);
 
   // Check hardware licensing status on initial launch
   useEffect(() => {
@@ -238,7 +262,7 @@ export const App: React.FC = () => {
   useEffect(() => {
     const cancelCounts = EventsOn('dcload:countsUpdated', () => {
       // Re-fetch counts from SQL Server in-place (preserves current page/filter/search)
-      refreshGridData(currentPage, pageSize, statusFilter, searchQuery);
+      refreshGridData(currentPage, pageSize, statusFilter, searchQuery, domain, columnFilters, activeCustomTable);
     });
 
     return () => {
@@ -248,7 +272,7 @@ export const App: React.FC = () => {
         EventsOff('dcload:countsUpdated');
       }
     };
-  }, [currentPage, pageSize, statusFilter, searchQuery, domain]);
+  }, [currentPage, pageSize, statusFilter, searchQuery, domain, columnFilters, activeCustomTable, refreshGridData]);
 
   // Open native file dialog and stream CSV directly into the active staging table
   const handleOpenFilePicker = async () => {
@@ -263,6 +287,29 @@ export const App: React.FC = () => {
       setIsUploading(true);
       setUploadProgress(0);
       setLastStagedInfo(null);
+
+      if (activeCustomTable) {
+        const uploadRes = await dbClient.uploadCsvToTable(
+          res.filePath,
+          dbConfig.companyCode,
+          dbConfig.division || '1',
+          activeCustomTable
+        );
+        setIsUploading(false);
+
+        if (uploadRes.success) {
+          setLastStagedInfo(
+            `Staged ${uploadRes.totalRows.toLocaleString()} rows into SQL Server [${dbConfig.database}].${activeCustomTable} at ${dbConfig.host}`
+          );
+          setCurrentPage(1);
+          setStatusFilter('ALL');
+          await refreshGridData(1, pageSize, 'ALL', searchQuery, domain, columnFilters, activeCustomTable);
+          setCurrentTab('importer');
+        } else {
+          alert(`CSV Bulk Insert to SQL Server failed: ${uploadRes.error}`);
+        }
+        return;
+      }
 
       const uploadRes = await dbClient.uploadCsv(res.filePath, dbConfig.companyCode, domain, dbConfig.division);
       setIsUploading(false);
@@ -280,7 +327,7 @@ export const App: React.FC = () => {
         );
         setCurrentPage(1);
         setStatusFilter('ALL');
-        await refreshGridData(1, pageSize, 'ALL', searchQuery);
+        await refreshGridData(1, pageSize, 'ALL', searchQuery, activeDomain, columnFilters, null);
         setCurrentTab('importer');
       } else {
         alert(`CSV Bulk Insert to SQL Server failed: ${uploadRes.error}`);
@@ -438,8 +485,11 @@ export const App: React.FC = () => {
       {/* Frameless Modern Titlebar */}
       <TitleBar
         domain={domain}
+        activeCustomTable={activeCustomTable}
         division={dbConfig.division || '1'}
         onDomainChange={handleDomainChange}
+        onSelectCustomTable={handleCustomTableSelect}
+        onOpenCustomTableDialog={() => setIsCustomTableDialogOpen(true)}
         companyCode={dbConfig.companyCode}
         dbConnected={dbConnected}
         dbHost={dbConfig.host}
@@ -502,6 +552,7 @@ export const App: React.FC = () => {
           {currentTab === 'importer' && (
             <ImportAndGridView
               domain={domain}
+              activeTargetTable={activeCustomTable}
               rows={gridRows}
               columns={columns}
               totalRows={totalRows}
@@ -651,6 +702,21 @@ export const App: React.FC = () => {
         dbDatabase={dbConfig.database}
         stagedRowsCount={counts.total}
         onClearComplete={handleClearStagedComplete}
+      />
+
+      {/* Custom Staging Table Management Modal (DDL Execute & Drop) */}
+      <CustomTableDialog
+        open={isCustomTableDialogOpen}
+        onOpenChange={setIsCustomTableDialogOpen}
+        dbConnected={dbConnected}
+        activeTargetTable={activeCustomTable}
+        onTableCreatedOrDropped={async (droppedTable) => {
+          if (droppedTable && droppedTable === activeCustomTable) {
+            handleDomainChange('inventory');
+          } else {
+            await refreshGridData();
+          }
+        }}
       />
 
       {/* Hardware Authorization & Activation Modal */}

@@ -12,8 +12,9 @@ import {
   X,
 } from 'lucide-react';
 import { useTheme } from '@/lib/theme';
-import { LoaderDomain } from '@/types/dcloader';
+import { LoaderDomain, StagingTableInfo } from '@/types/dcloader';
 import { LicenseStatus } from '@/types/security';
+import { TableSwitcher } from '@/components/ui/TableSwitcher';
 import { MinimizeWindow, ToggleMaximizeWindow, CloseWindow } from '@/../wailsjs/go/main/App';
 
 interface TitleBarProps {
@@ -23,7 +24,10 @@ interface TitleBarProps {
   dbHost: string;
   dbDatabase?: string;
   domain: LoaderDomain;
+  activeCustomTable?: string | null;
   onDomainChange: (domain: LoaderDomain) => void;
+  onSelectCustomTable?: (table: StagingTableInfo) => void;
+  onOpenCustomTableDialog?: () => void;
   onOpenDbConfig: () => void;
   onOpenCleanDialog?: () => void;
   onOpenClearStagedDialog?: () => void;
@@ -40,7 +44,10 @@ export const TitleBar: React.FC<TitleBarProps> = ({
   dbHost,
   dbDatabase,
   domain,
+  activeCustomTable,
   onDomainChange,
+  onSelectCustomTable,
+  onOpenCustomTableDialog,
   onOpenDbConfig,
   onDisconnect,
   licenseStatus,
@@ -60,45 +67,55 @@ export const TitleBar: React.FC<TitleBarProps> = ({
           <span className="tracking-tight font-medium text-xs">ROSS ERP</span>
           <span className="text-muted-foreground text-[10px] font-normal">/</span>
           <span className="text-foreground font-mono text-[11px] font-medium hidden sm:inline">
-            {domain === 'sales_orders' ? 'SOP LOADER' : 'DC LOADER'}
+            {activeCustomTable ? activeCustomTable : (domain === 'sales_orders' ? 'SOP LOADER' : 'DC LOADER')}
           </span>
           <span className="text-[10px] px-1 py-0.5 rounded bg-secondary border border-border text-muted-foreground font-mono hidden md:inline">
-            {domain === 'sales_orders' ? 'SOP' : 'STAGING'}
+            {activeCustomTable ? 'CUSTOM' : (domain === 'sales_orders' ? 'SOP' : 'STAGING')}
           </span>
         </div>
       </div>
 
-      {/* Middle: Domain Switcher & Compact Database Status (flex-1 min-w-0 for graceful space handling) */}
+      {/* Middle: Domain / Custom Table Switcher & Compact Database Status */}
       <div className="flex items-center justify-center gap-2 flex-1 min-w-0 px-2 wails-no-drag overflow-hidden">
-        {/* Domain Mode Switcher Pill */}
-        <div className="flex items-center rounded-md bg-secondary p-0.5 border border-border shadow-inner shrink-0">
-          <button
-            onClick={() => onDomainChange('inventory')}
-            className={`flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-medium transition-all ${
-              domain === 'inventory'
-                ? 'bg-background text-foreground shadow-sm font-semibold'
-                : 'text-muted-foreground hover:text-foreground'
-            }`}
-            title="Switch to DC Inventory Loader Mode"
-          >
-            <Boxes className="w-3 h-3 text-sky-500" />
-            <span className="hidden sm:inline">DC Inventory</span>
-            <span className="sm:hidden">DC</span>
-          </button>
-          <button
-            onClick={() => onDomainChange('sales_orders')}
-            className={`flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-medium transition-all ${
-              domain === 'sales_orders'
-                ? 'bg-background text-foreground shadow-sm font-semibold'
-                : 'text-muted-foreground hover:text-foreground'
-            }`}
-            title="Switch to Sales Order Loader Mode"
-          >
-            <ShoppingCart className="w-3 h-3 text-amber-500" />
-            <span className="hidden sm:inline">Sales Orders</span>
-            <span className="sm:hidden">SO</span>
-          </button>
-        </div>
+        {onSelectCustomTable && onOpenCustomTableDialog ? (
+          <TableSwitcher
+            currentDomain={domain}
+            activeCustomTable={activeCustomTable || null}
+            onSelectStandardDomain={onDomainChange}
+            onSelectCustomTable={onSelectCustomTable}
+            onOpenCustomTableDialog={onOpenCustomTableDialog}
+            dbConnected={dbConnected}
+          />
+        ) : (
+          <div className="flex items-center rounded-md bg-secondary p-0.5 border border-border shadow-inner shrink-0">
+            <button
+              onClick={() => onDomainChange('inventory')}
+              className={`flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-medium transition-all ${
+                domain === 'inventory'
+                  ? 'bg-background text-foreground shadow-sm font-semibold'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+              title="Switch to DC Inventory Loader Mode"
+            >
+              <Boxes className="w-3 h-3 text-sky-500" />
+              <span className="hidden sm:inline">DC Inventory</span>
+              <span className="sm:hidden">DC</span>
+            </button>
+            <button
+              onClick={() => onDomainChange('sales_orders')}
+              className={`flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-medium transition-all ${
+                domain === 'sales_orders'
+                  ? 'bg-background text-foreground shadow-sm font-semibold'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+              title="Switch to Sales Order Loader Mode"
+            >
+              <ShoppingCart className="w-3 h-3 text-amber-500" />
+              <span className="hidden sm:inline">Sales Orders</span>
+              <span className="sm:hidden">SO</span>
+            </button>
+          </div>
+        )}
 
         {/* Compact, Streamlined Database Status Pill */}
         <div className="flex items-center rounded-md border border-border bg-secondary/50 hover:bg-secondary/80 transition-colors overflow-hidden shrink min-w-0">
