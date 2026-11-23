@@ -116,7 +116,7 @@ func (m *Manager) QueryGrid(ctx context.Context, params models.GridQueryParams) 
 		for _, c := range schemaCols {
 			lowerType := strings.ToLower(c.DataType)
 			if strings.Contains(lowerType, "char") || strings.Contains(lowerType, "text") {
-				textColExprs = append(textColExprs, fmt.Sprintf("ISNULL(%s, '') LIKE @p%d", c.Name, argIdx))
+				textColExprs = append(textColExprs, fmt.Sprintf("ISNULL([%s], '') LIKE @p%d", c.Name, argIdx))
 			}
 		}
 		if len(textColExprs) > 0 {
@@ -214,8 +214,10 @@ func (m *Manager) QueryGrid(ctx context.Context, params models.GridQueryParams) 
 	if !hasPk && len(schemaCols) > 0 {
 		primaryKeyCol = schemaCols[0].Name
 	}
-	if primaryKeyCol == "" {
-		primaryKeyCol = "1"
+
+	orderClause := fmt.Sprintf("[%s] ASC", primaryKeyCol)
+	if primaryKeyCol == "" || primaryKeyCol == "1" {
+		orderClause = "(SELECT NULL)"
 	}
 
 	selectClause := strings.Join(selectExpressions, ", ")
@@ -228,9 +230,9 @@ func (m *Manager) QueryGrid(ctx context.Context, params models.GridQueryParams) 
 			%s
 		FROM %s
 		%s
-		ORDER BY [%s] ASC
+		ORDER BY %s
 		OFFSET %d ROWS FETCH NEXT %d ROWS ONLY
-	`, selectClause, tableName, whereClause, primaryKeyCol, offset, pageSize)
+	`, selectClause, tableName, whereClause, orderClause, offset, pageSize)
 
 	rows, err := db.QueryContext(ctx, dataQuery, args...)
 	if err != nil {
