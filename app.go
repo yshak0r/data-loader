@@ -195,6 +195,41 @@ func (a *App) UploadCsv(filePath string, companyCode string, division string, do
 	}
 }
 
+// UploadCsvToTable uploads a CSV into an arbitrary already-existing staging table.
+// targetTable must be a fully-qualified name such as "[FIN].[MY_TABLE]" or a bare name
+// that ResolveTableName can resolve.  The staging table must already exist in the database.
+func (a *App) UploadCsvToTable(filePath string, companyCode string, division string, targetTable string) models.UploadResult {
+	if division == "" {
+		division = "1"
+	}
+	if targetTable == "" {
+		return models.UploadResult{Success: false, Message: "targetTable must not be empty", Domain: ""}
+	}
+
+	db, _, err := a.dbManager.GetDB()
+	if err != nil {
+		return models.UploadResult{Success: false, Message: err.Error(), Domain: targetTable}
+	}
+
+	progressCb := func(loaded int) {
+		runtime.EventsEmit(a.ctx, "dcload:uploadProgress", map[string]int{"loaded": loaded})
+	}
+
+	// Pass targetTable as the preferredDomain; UploadCsv will route to uploadGenericCsv
+	// because it won't match "inventory" or "sales_orders".
+	activeDomain, count, err := csv.UploadCsv(a.ctx, db, filePath, companyCode, division, targetTable, progressCb)
+	if err != nil {
+		return models.UploadResult{Success: false, Message: err.Error(), Domain: activeDomain}
+	}
+	runtime.EventsEmit(a.ctx, "dcload:countsUpdated", map[string]string{"op": "upload", "table": targetTable})
+	return models.UploadResult{
+		Success:   true,
+		TotalRows: count,
+		Message:   fmt.Sprintf("Successfully staged %d rows into %s.", count, targetTable),
+		Domain:    activeDomain,
+	}
+}
+
 func (a *App) ExecuteDryRun(domain string) (*models.DryRunResult, error) {
 	script := a.scriptsMgr.GetScriptContent(domain, scripts.SlotDryRun)
 	res, err := a.dbManager.ExecuteDryRun(a.ctx, domain, script)
