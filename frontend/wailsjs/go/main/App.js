@@ -38,6 +38,10 @@ export function DisconnectDatabase() {
   return window['go']['main']['App']['DisconnectDatabase']();
 }
 
+export function DropCustomTable(arg1) {
+  return window['go']['main']['App']['DropCustomTable'](arg1);
+}
+
 export function DropStagingTable(arg1) {
   return window['go']['main']['App']['DropStagingTable'](arg1);
 }
@@ -48,6 +52,10 @@ export function EnsureTableExists(arg1) {
 
 export function EnsureTableExistsWithOptions(arg1, arg2) {
   return window['go']['main']['App']['EnsureTableExistsWithOptions'](arg1, arg2);
+}
+
+export function ExecuteCustomDDL(arg1) {
+  return window['go']['main']['App']['ExecuteCustomDDL'](arg1);
 }
 
 export function ExecuteDryRun(arg1) {
@@ -84,6 +92,10 @@ export function GetLicenseStatus() {
 
 export function GetMachineFingerprint() {
   return window['go']['main']['App']['GetMachineFingerprint']();
+}
+
+export function ListStagingTables() {
+  return window['go']['main']['App']['ListStagingTables']();
 }
 
 export function LockOperatorSession() {
@@ -140,4 +152,8 @@ export function ToggleMaximizeWindow() {
 
 export function UploadCsv(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['UploadCsv'](arg1, arg2, arg3, arg4);
+}
+
+export function UploadCsvToTable(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['UploadCsvToTable'](arg1, arg2, arg3, arg4);
 }

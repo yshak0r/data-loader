@@ -21,11 +21,15 @@ export function ConnectDatabase(arg1:models.DatabaseConfig):Promise<models.Conne
 
 export function DisconnectDatabase():Promise<boolean>;
 
+export function DropCustomTable(arg1:string):Promise<models.TableResult>;
+
 export function DropStagingTable(arg1:string):Promise<models.TableResult>;
 
 export function EnsureTableExists(arg1:string):Promise<models.TableResult>;
 
 export function EnsureTableExistsWithOptions(arg1:string,arg2:boolean):Promise<models.TableResult>;
+
+export function ExecuteCustomDDL(arg1:string):Promise<models.TableResult>;
 
 export function ExecuteDryRun(arg1:string):Promise<models.DryRunResult>;
 
@@ -44,6 +48,8 @@ export function GetDatabaseStatus():Promise<models.ConnectionStatus>;
 export function GetLicenseStatus():Promise<models.LicenseStatus>;
 
 export function GetMachineFingerprint():Promise<string>;
+
+export function ListStagingTables():Promise<models.StagingTableInfo[]>;
 
 export function LockOperatorSession():Promise<models.LicenseStatus>;
 
@@ -72,3 +78,5 @@ export function TestDatabaseConnection(arg1:models.DatabaseConfig):Promise<model
 export function ToggleMaximizeWindow():Promise<void>;
 
 export function UploadCsv(arg1:string,arg2:string,arg3:string,arg4:string):Promise<models.UploadResult>;
+
+export function UploadCsvToTable(arg1:string,arg2:string,arg3:string,arg4:string):Promise<models.UploadResult>;

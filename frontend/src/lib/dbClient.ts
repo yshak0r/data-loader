@@ -9,6 +9,7 @@ import {
   SqlScriptSlot,
   SqlScriptInfo,
   LoaderDomain,
+  StagingTableInfo,
   ColumnDefinition,
   DistinctValuesParams,
   DistinctValuesResult,
@@ -187,6 +188,34 @@ class DbClient {
         success: false,
         totalRows: 0,
         error: err.message || 'Failed to upload CSV file.',
+      };
+    }
+  }
+
+  public async uploadCsvToTable(
+    filePath: string,
+    companyCode: string = 'CORP',
+    division: string = '1',
+    targetTable: string
+  ): Promise<{
+    success: boolean;
+    totalRows: number;
+    error?: string;
+    domain?: string;
+  }> {
+    try {
+      const res = await App.UploadCsvToTable(filePath, companyCode, division || '1', targetTable);
+      return {
+        success: res.success,
+        totalRows: res.totalRows,
+        error: res.success ? undefined : res.message,
+        domain: res.domain || targetTable,
+      };
+    } catch (err: any) {
+      return {
+        success: false,
+        totalRows: 0,
+        error: err.message || 'Failed to upload CSV file into custom table.',
       };
     }
   }
@@ -465,6 +494,34 @@ class DbClient {
       return { success: res.success, message: res.message };
     } catch (err: any) {
       return { success: false, message: err.message || 'Failed to drop table.' };
+    }
+  }
+
+  public async listStagingTables(): Promise<StagingTableInfo[]> {
+    try {
+      const res = await App.ListStagingTables();
+      return (res || []) as unknown as StagingTableInfo[];
+    } catch (err: any) {
+      console.error('Failed to list staging tables:', err);
+      return [];
+    }
+  }
+
+  public async executeCustomDDL(script: string): Promise<{ success: boolean; message: string }> {
+    try {
+      const res = await App.ExecuteCustomDDL(script);
+      return { success: res.success, message: res.message };
+    } catch (err: any) {
+      return { success: false, message: err.message || 'Failed to execute custom DDL script.' };
+    }
+  }
+
+  public async dropCustomTable(targetTable: string): Promise<{ success: boolean; message: string }> {
+    try {
+      const res = await App.DropCustomTable(targetTable);
+      return { success: res.success, message: res.message };
+    } catch (err: any) {
+      return { success: false, message: err.message || 'Failed to drop custom table.' };
     }
   }
 

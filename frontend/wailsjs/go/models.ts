@@ -577,6 +577,30 @@ export namespace models {
 
 export namespace scripts {
 	
+	export class StagingTableInfo {
+	    schemaName: string;
+	    tableName: string;
+	    fullName: string;
+	    rowCount: number;
+	    isStandard: boolean;
+	    hasStatusFlag: boolean;
+	    createDate: string;
+
+	    static createFrom(source: any = {}) {
+	        return new StagingTableInfo(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.schemaName = source["schemaName"];
+	        this.tableName = source["tableName"];
+	        this.fullName = source["fullName"];
+	        this.rowCount = source["rowCount"];
+	        this.isStandard = source["isStandard"];
+	        this.hasStatusFlag = source["hasStatusFlag"];
+	        this.createDate = source["createDate"];
+	    }
+	}
 	export class ScriptSlotInfo {
 	    slot: string;
 	    domain: string;

@@ -1,5 +1,15 @@
 export type LoaderDomain = 'inventory' | 'sales_orders';
 
+export interface StagingTableInfo {
+  schemaName: string;
+  tableName: string;
+  fullName: string;
+  rowCount: number;
+  isStandard: boolean;
+  hasStatusFlag: boolean;
+  createDate: string;
+}
+
 export interface ColumnDefinition {
   name: string;
   dataType: string;
