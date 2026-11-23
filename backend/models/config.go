@@ -63,6 +63,17 @@ type DistinctValuesResult struct {
 	HasBlanks  bool     `json:"hasBlanks"`
 }
 
+// StagingTableInfo represents metadata for an introspected staging or custom table.
+type StagingTableInfo struct {
+	SchemaName    string `json:"schemaName"`
+	TableName     string `json:"tableName"`
+	FullName      string `json:"fullName"` // e.g. "[FIN].[KAS_DC_LOADS]"
+	RowCount      int    `json:"rowCount"`
+	IsStandard    bool   `json:"isStandard"`
+	HasStatusFlag bool   `json:"hasStatusFlag"`
+	CreateDate    string `json:"createDate"`
+}
+
 // ColumnDefinition provides frontend metadata for dynamically introspected columns.
 type ColumnDefinition struct {
 	Name       string `json:"name"`

@@ -120,6 +120,32 @@ func (a *App) ClearStagedData(domain string) models.ClearResult {
 	}
 }
 
+func (a *App) ListStagingTables() ([]models.StagingTableInfo, error) {
+	return a.dbManager.ListStagingTables(a.ctx)
+}
+
+func (a *App) ExecuteCustomDDL(script string) models.TableResult {
+	ok, msg := a.dbManager.ExecuteCustomDDL(a.ctx, script)
+	if ok {
+		runtime.EventsEmit(a.ctx, "dcload:countsUpdated", map[string]string{"op": "custom_ddl"})
+	}
+	return models.TableResult{
+		Success: ok,
+		Message: msg,
+	}
+}
+
+func (a *App) DropCustomTable(targetTable string) models.TableResult {
+	ok, msg := a.dbManager.DropTable(a.ctx, targetTable)
+	if ok {
+		runtime.EventsEmit(a.ctx, "dcload:countsUpdated", map[string]string{"op": "drop_table", "table": targetTable})
+	}
+	return models.TableResult{
+		Success: ok,
+		Message: msg,
+	}
+}
+
 // CSV Ingestion & Execution Engine
 func (a *App) UploadCsv(filePath string, companyCode string, division string, domain string) models.UploadResult {
 	// Defensive swap if caller inverted division and domain

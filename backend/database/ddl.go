@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"strings"
+
+	"dc-loader-wails/backend/models"
 )
 
 const dcLoadsTableDDL = `
@@ -332,5 +334,145 @@ func (m *Manager) ClearStagedData(ctx context.Context, domain string) (bool, int
 	}
 
 	return true, count, fmt.Sprintf("Cleared %d staged records from %s", count, tableName)
+}
+
+// ListStagingTables returns all staging and custom user tables from SQL Server.
+func (m *Manager) ListStagingTables(ctx context.Context) ([]models.StagingTableInfo, error) {
+	db, _, err := m.GetDB()
+	if err != nil {
+		return nil, err
+	}
+
+	query := `
+		SELECT 
+			s.name AS schema_name, 
+			t.name AS table_name,
+			QUOTENAME(s.name) + '.' + QUOTENAME(t.name) AS full_name,
+			ISNULL(p.rows, 0) AS row_count,
+			CONVERT(VARCHAR(19), t.create_date, 120) AS create_date,
+			CASE WHEN col_status.column_id IS NOT NULL THEN 1 ELSE 0 END AS has_status_flag
+		FROM sys.tables t
+		JOIN sys.schemas s ON t.schema_id = s.schema_id
+		LEFT JOIN (
+			SELECT object_id, SUM(rows) AS rows 
+			FROM sys.partitions 
+			WHERE index_id IN (0, 1) 
+			GROUP BY object_id
+		) p ON t.object_id = p.object_id
+		LEFT JOIN sys.columns col_status ON t.object_id = col_status.object_id AND col_status.name = 'STATUS_FLAG'
+		WHERE t.is_ms_shipped = 0 AND s.name IN ('FIN', 'dbo')
+		ORDER BY 
+			CASE 
+				WHEN t.name = 'KAS_DC_LOADS' THEN 1
+				WHEN t.name = 'KAS_SO_LOADS' THEN 2
+				ELSE 3
+			END ASC,
+			s.name ASC, 
+			t.name ASC;
+	`
+
+	rows, err := db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query staging tables: %w", err)
+	}
+	defer rows.Close()
+
+	var tables []models.StagingTableInfo
+	foundDc := false
+	foundSo := false
+
+	for rows.Next() {
+		var item models.StagingTableInfo
+		var hasStatus int
+		if err := rows.Scan(&item.SchemaName, &item.TableName, &item.FullName, &item.RowCount, &item.CreateDate, &hasStatus); err != nil {
+			continue
+		}
+		item.HasStatusFlag = (hasStatus == 1)
+
+		if strings.EqualFold(item.TableName, "KAS_DC_LOADS") {
+			item.IsStandard = true
+			foundDc = true
+		} else if strings.EqualFold(item.TableName, "KAS_SO_LOADS") {
+			item.IsStandard = true
+			foundSo = true
+		} else {
+			item.IsStandard = false
+		}
+
+		tables = append(tables, item)
+	}
+
+	// Always ensure standard staging tables are present in the catalog
+	if !foundDc {
+		tables = append([]models.StagingTableInfo{{
+			SchemaName:    "FIN",
+			TableName:     "KAS_DC_LOADS",
+			FullName:      "[FIN].[KAS_DC_LOADS]",
+			RowCount:      0,
+			IsStandard:    true,
+			HasStatusFlag: true,
+			CreateDate:    "",
+		}}, tables...)
+	}
+	if !foundSo {
+		insertIdx := 0
+		if len(tables) > 0 && tables[0].TableName == "KAS_DC_LOADS" {
+			insertIdx = 1
+		}
+		tables = append(tables[:insertIdx], append([]models.StagingTableInfo{{
+			SchemaName:    "FIN",
+			TableName:     "KAS_SO_LOADS",
+			FullName:      "[FIN].[KAS_SO_LOADS]",
+			RowCount:      0,
+			IsStandard:    true,
+			HasStatusFlag: true,
+			CreateDate:    "",
+		}}, tables[insertIdx:]...)...)
+	}
+
+	return tables, nil
+}
+
+// ExecuteCustomDDL executes an arbitrary custom DDL SQL script (e.g. creating tables/indexes/triggers).
+func (m *Manager) ExecuteCustomDDL(ctx context.Context, script string) (bool, string) {
+	db, _, err := m.GetDB()
+	if err != nil {
+		return false, err.Error()
+	}
+
+	if strings.TrimSpace(script) == "" {
+		return false, "Script content is empty."
+	}
+
+	batches := SplitSqlBatches(script)
+	for i, b := range batches {
+		trimmed := strings.TrimSpace(b)
+		if trimmed == "" {
+			continue
+		}
+		if _, err := db.ExecContext(ctx, trimmed); err != nil {
+			return false, fmt.Sprintf("Execution failed at batch %d: %v", i+1, err)
+		}
+	}
+
+	InvalidateSchemaCache("")
+	return true, "SQL script executed successfully."
+}
+
+// DropTable drops any staging or custom table safely.
+func (m *Manager) DropTable(ctx context.Context, targetTable string) (bool, string) {
+	db, _, err := m.GetDB()
+	if err != nil {
+		return false, err.Error()
+	}
+
+	fullName, _ := ResolveTableName("", targetTable)
+	dropSQL := fmt.Sprintf("IF OBJECT_ID('%s', 'U') IS NOT NULL DROP TABLE %s;", fullName, fullName)
+	if _, err := db.ExecContext(ctx, dropSQL); err != nil {
+		return false, fmt.Sprintf("Failed to drop table %s: %v", fullName, err)
+	}
+
+	InvalidateSchemaCache("")
+	return true, fmt.Sprintf("Table %s dropped successfully.", fullName)
 }
 
