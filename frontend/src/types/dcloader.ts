@@ -291,3 +291,18 @@ export interface SqlScriptInfo {
   isLoaded?: boolean;
   lastUpdated?: string;
 }
+
+export interface DistinctValuesParams {
+  domain?: LoaderDomain | string;
+  targetTable?: string;
+  columnName: string;
+  search?: string;
+  limit?: number;
+}
+
+export interface DistinctValuesResult {
+  values: string[];
+  totalCount: number;
+  truncated: boolean;
+  hasBlanks: boolean;
+}

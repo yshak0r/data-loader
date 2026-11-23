@@ -37,6 +37,8 @@ export function GetAllSqlScripts(arg1:string):Promise<Record<scripts.ScriptSlot,
 
 export function GetCleanPreview(arg1:string):Promise<models.CleanPreview>;
 
+export function GetColumnDistinctValues(arg1:models.DistinctValuesParams):Promise<models.DistinctValuesResult>;
+
 export function GetDatabaseStatus():Promise<models.ConnectionStatus>;
 
 export function GetLicenseStatus():Promise<models.LicenseStatus>;

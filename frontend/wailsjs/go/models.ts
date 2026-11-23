@@ -354,6 +354,8 @@ export namespace models {
 	    statusFilter: string;
 	    search: string;
 	    domain: string;
+	    targetTable?: string;
+	    columnFilters?: Record<string, string>;
 	
 	    static createFrom(source: any = {}) {
 	        return new GridQueryParams(source);
@@ -366,6 +368,46 @@ export namespace models {
 	        this.statusFilter = source["statusFilter"];
 	        this.search = source["search"];
 	        this.domain = source["domain"];
+	        this.targetTable = source["targetTable"];
+	        this.columnFilters = source["columnFilters"];
+	    }
+	}
+	export class DistinctValuesParams {
+	    domain: string;
+	    targetTable?: string;
+	    columnName: string;
+	    search?: string;
+	    limit?: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new DistinctValuesParams(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.domain = source["domain"];
+	        this.targetTable = source["targetTable"];
+	        this.columnName = source["columnName"];
+	        this.search = source["search"];
+	        this.limit = source["limit"];
+	    }
+	}
+	export class DistinctValuesResult {
+	    values: string[];
+	    totalCount: number;
+	    truncated: boolean;
+	    hasBlanks: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new DistinctValuesResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.values = source["values"];
+	        this.totalCount = source["totalCount"];
+	        this.truncated = source["truncated"];
+	        this.hasBlanks = source["hasBlanks"];
 	    }
 	}
 	export class GridQueryResult {

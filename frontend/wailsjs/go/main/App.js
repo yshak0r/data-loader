@@ -70,6 +70,10 @@ export function GetCleanPreview(arg1) {
   return window['go']['main']['App']['GetCleanPreview'](arg1);
 }
 
+export function GetColumnDistinctValues(arg1) {
+  return window['go']['main']['App']['GetColumnDistinctValues'](arg1);
+}
+
 export function GetDatabaseStatus() {
   return window['go']['main']['App']['GetDatabaseStatus']();
 }

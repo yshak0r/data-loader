@@ -10,6 +10,8 @@ import {
   SqlScriptInfo,
   LoaderDomain,
   ColumnDefinition,
+  DistinctValuesParams,
+  DistinctValuesResult,
 } from '@/types/dcloader';
 import { LicenseStatus, LicenseFileContent } from '@/types/security';
 import * as App from '@/../wailsjs/go/main/App';
@@ -21,6 +23,8 @@ export interface GridQueryParams {
   statusFilter: string; // 'ALL' | 'V' | 'E' | 'L' | ' '
   search: string;
   domain?: LoaderDomain;
+  targetTable?: string;
+  columnFilters?: Record<string, string>;
 }
 
 export interface GridQueryResult<T = any> {
@@ -275,6 +279,8 @@ class DbClient {
         statusFilter: params.statusFilter,
         search: params.search,
         domain: params.domain || 'inventory',
+        targetTable: params.targetTable || '',
+        columnFilters: params.columnFilters || {},
       });
       const res = await App.QueryGrid(qp);
       return {
@@ -291,6 +297,33 @@ class DbClient {
         counts: { total: 0, valid: 0, error: 0, loaded: 0 },
         connected: false,
         columns: [],
+      };
+    }
+  }
+
+  public async getColumnDistinctValues(params: DistinctValuesParams): Promise<DistinctValuesResult> {
+    try {
+      const p = new models.DistinctValuesParams({
+        domain: params.domain || 'inventory',
+        targetTable: params.targetTable || '',
+        columnName: params.columnName,
+        search: params.search || '',
+        limit: params.limit || 100,
+      });
+      const res = await App.GetColumnDistinctValues(p);
+      return {
+        values: res.values || [],
+        totalCount: res.totalCount || 0,
+        truncated: Boolean(res.truncated),
+        hasBlanks: Boolean(res.hasBlanks),
+      };
+    } catch (err) {
+      console.warn('Failed to fetch distinct column values:', err);
+      return {
+        values: [],
+        totalCount: 0,
+        truncated: false,
+        hasBlanks: false,
       };
     }
   }
