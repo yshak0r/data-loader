@@ -26,6 +26,7 @@ export const App: React.FC = () => {
   const [gridRows, setGridRows] = useState<any[]>([]);
   const [totalRows, setTotalRows] = useState<number>(0);
   const [columns, setColumns] = useState<ColumnDefinition[]>([]);
+  const [columnFilters, setColumnFilters] = useState<Record<string, string>>({});
   const [counts, setCounts] = useState<GridCounts>({
     total: 0,
     valid: 0,
@@ -82,7 +83,8 @@ export const App: React.FC = () => {
     size = pageSize,
     filter = statusFilter,
     search = searchQuery,
-    targetDomain = domain
+    targetDomain = domain,
+    activeColFilters = columnFilters
   ) => {
     setIsLoading(true);
     try {
@@ -92,6 +94,7 @@ export const App: React.FC = () => {
         statusFilter: filter,
         search,
         domain: targetDomain,
+        columnFilters: activeColFilters,
       });
       setDbConnected(res.connected);
       setGridRows(res.rows || []);
@@ -110,17 +113,38 @@ export const App: React.FC = () => {
     } finally {
       setIsLoading(false);
     }
-  }, [currentPage, pageSize, statusFilter, searchQuery, domain]);
+  }, [currentPage, pageSize, statusFilter, searchQuery, domain, columnFilters]);
+
+  const handleColumnFilterChange = useCallback((columnName: string, value: string | null) => {
+    setColumnFilters((prev) => {
+      const updated = { ...prev };
+      if (value === null || value === undefined || value.trim() === '') {
+        delete updated[columnName];
+      } else {
+        updated[columnName] = value.trim();
+      }
+      setCurrentPage(1);
+      refreshGridData(1, pageSize, statusFilter, searchQuery, domain, updated);
+      return updated;
+    });
+  }, [pageSize, statusFilter, searchQuery, domain, refreshGridData]);
+
+  const handleClearAllColumnFilters = useCallback(() => {
+    setColumnFilters({});
+    setCurrentPage(1);
+    refreshGridData(1, pageSize, statusFilter, searchQuery, domain, {});
+  }, [pageSize, statusFilter, searchQuery, domain, refreshGridData]);
 
   const handleDomainChange = useCallback((newDomain: LoaderDomain) => {
     setDomain(newDomain);
     setCurrentPage(1);
     setStatusFilter('ALL');
     setSearchQuery('');
+    setColumnFilters({});
     setFileName('');
     setLastStagedInfo(null);
     if (dbConnected) {
-      refreshGridData(1, pageSize, 'ALL', '', newDomain);
+      refreshGridData(1, pageSize, 'ALL', '', newDomain, {});
     } else {
       setGridRows([]);
       setTotalRows(0);
@@ -513,6 +537,9 @@ export const App: React.FC = () => {
                 setCurrentPage(1);
                 refreshGridData(1, pageSize, statusFilter, q);
               }}
+              columnFilters={columnFilters}
+              onColumnFilterChange={handleColumnFilterChange}
+              onClearAllColumnFilters={handleClearAllColumnFilters}
               onOpenFilePicker={handleOpenFilePicker}
               onRunDryRun={handleRunDryRun}
               onRefresh={() => refreshGridData()}

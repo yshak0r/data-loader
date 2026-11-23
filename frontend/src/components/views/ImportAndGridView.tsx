@@ -18,6 +18,8 @@ import {
   AlertTriangle,
   ArrowRight,
   Trash2,
+  Filter,
+  X,
 } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
@@ -30,6 +32,7 @@ import {
   TableHead,
   TableCell,
 } from '../ui/table';
+import { ColumnHeaderFilter } from '../ui/ColumnHeaderFilter';
 import { KasDcLoadRecord, GridCounts, LoaderDomain, ColumnDefinition } from '../../types/dcloader';
 
 interface ImportAndGridViewProps {
@@ -50,6 +53,9 @@ interface ImportAndGridViewProps {
   dbDatabase: string;
   lastStagedInfo: string | null;
   domain?: LoaderDomain;
+  columnFilters?: Record<string, string>;
+  onColumnFilterChange?: (columnName: string, value: string | null) => void;
+  onClearAllColumnFilters?: () => void;
   onPageChange: (page: number) => void;
   onPageSizeChange: (pageSize: number) => void;
   onStatusFilterChange: (status: string) => void;
@@ -82,6 +88,9 @@ export const ImportAndGridView: React.FC<ImportAndGridViewProps> = ({
   dbDatabase,
   lastStagedInfo,
   domain = 'inventory',
+  columnFilters = {},
+  onColumnFilterChange,
+  onClearAllColumnFilters,
   onPageChange,
   onPageSizeChange,
   onStatusFilterChange,
@@ -238,6 +247,28 @@ export const ImportAndGridView: React.FC<ImportAndGridViewProps> = ({
       .replace(/\b\w/g, (c) => c.toUpperCase());
   };
 
+  const activeFilterEntries = useMemo(() => {
+    if (!columnFilters) return [];
+    return Object.entries(columnFilters).filter(([_, v]) => Boolean(v && v.trim() !== ''));
+  }, [columnFilters]);
+
+  const renderHeaderWithFilter = (title: string, colName: string, customWidthClass?: string) => (
+    <TableHead className={customWidthClass || 'whitespace-nowrap px-3 font-medium'}>
+      <div className="flex items-center justify-between gap-1">
+        <span className="truncate">{title}</span>
+        {onColumnFilterChange && (
+          <ColumnHeaderFilter
+            columnName={colName}
+            columnTitle={title}
+            domain={domain}
+            activeFilter={columnFilters?.[colName]}
+            onFilterChange={onColumnFilterChange}
+          />
+        )}
+      </div>
+    </TableHead>
+  );
+
   const renderDynamicCell = (val: any, col: ColumnDefinition) => {
     if (val === null || val === undefined || val === '') {
       return <span className="text-muted-foreground/40">—</span>;
@@ -367,7 +398,14 @@ export const ImportAndGridView: React.FC<ImportAndGridViewProps> = ({
               </>
             )}
             <span className="text-border">|</span>
-            <span className="font-mono text-muted-foreground text-[11px]">{counts.total.toLocaleString()} rows</span>
+            <span className="font-mono text-muted-foreground text-[11px]">
+              {counts.total.toLocaleString()} rows
+              {totalRows !== counts.total && (
+                <span className="text-sky-600 dark:text-sky-400 font-semibold ml-1">
+                  ({totalRows.toLocaleString()} filtered)
+                </span>
+              )}
+            </span>
           </div>
         </div>
 
@@ -495,6 +533,44 @@ export const ImportAndGridView: React.FC<ImportAndGridViewProps> = ({
         </div>
       )}
 
+      {/* Active Column Filters Ribbon */}
+      {activeFilterEntries.length > 0 && (
+        <div className="bg-sky-50/80 dark:bg-sky-950/50 border-b border-sky-200/60 dark:border-sky-800/40 px-4 py-1.5 flex items-center gap-2 flex-wrap text-xs shrink-0">
+          <span className="text-[11px] font-semibold text-sky-900 dark:text-sky-200 flex items-center gap-1.5">
+            <Filter className="w-3.5 h-3.5 text-sky-600 dark:text-sky-400" />
+            Active Column Filters ({activeFilterEntries.length}):
+          </span>
+          {activeFilterEntries.map(([col, val]) => (
+            <span
+              key={col}
+              className="inline-flex items-center gap-1 bg-background border border-sky-300 dark:border-sky-700/70 text-foreground px-2 py-0.5 rounded-full text-[11px] font-medium shadow-2xs"
+            >
+              <span className="text-muted-foreground">{formatColumnTitle(col)}:</span>
+              <span className="font-mono font-bold text-sky-700 dark:text-sky-300">{val}</span>
+              {onColumnFilterChange && (
+                <button
+                  type="button"
+                  onClick={() => onColumnFilterChange(col, null)}
+                  className="text-muted-foreground hover:text-rose-600 p-0.5 rounded"
+                  title="Remove filter"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              )}
+            </span>
+          ))}
+          {onClearAllColumnFilters && (
+            <button
+              type="button"
+              onClick={onClearAllColumnFilters}
+              className="text-[11px] text-rose-600 dark:text-rose-400 hover:underline font-semibold ml-auto"
+            >
+              Clear All Filters
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Main High-Performance SQL Server Grid */}
       <div className="flex-1 overflow-auto bg-background relative">
         {isLoading && (
@@ -560,25 +636,21 @@ export const ImportAndGridView: React.FC<ImportAndGridViewProps> = ({
             <TableHeader>
               <TableRow className="border-b border-border/80 text-[11px] whitespace-nowrap">
                 <TableHead className="w-14 text-center">DBKey</TableHead>
-                <TableHead className="w-24">Status</TableHead>
-                <TableHead className="w-24">Order Date</TableHead>
-                <TableHead className="w-24">Customer</TableHead>
-                <TableHead className="w-20">Ship-To</TableHead>
-                <TableHead className="w-28">Cust PO Ref</TableHead>
-                <TableHead className="w-12 text-center">EDI</TableHead>
-                <TableHead className="w-24">Req Delivery</TableHead>
-                <TableHead className="w-12">Wh</TableHead>
-                <TableHead className="w-28">ROSS Part Code</TableHead>
+                {renderHeaderWithFilter('Status', 'STATUS_FLAG', 'w-24')}
+                {renderHeaderWithFilter('Order Date', 'ORDER_DATE', 'w-28')}
+                {renderHeaderWithFilter('Customer', 'CUSTOMER_NUMBER', 'w-32')}
+                {renderHeaderWithFilter('Ship-To', 'DELIVERY_ADDRESS_CODE', 'w-24')}
+                {renderHeaderWithFilter('Cust PO Ref', 'CUSTOMER_REFERENCE', 'w-32')}
+                {renderHeaderWithFilter('EDI', 'EDI_ORDER', 'w-20 text-center')}
+                {renderHeaderWithFilter('Req Delivery', 'SYS_DELIVERY_DATE', 'w-28')}
+                {renderHeaderWithFilter('Wh', 'WAREHOUSE', 'w-20')}
+                {renderHeaderWithFilter('ROSS Part Code', 'PART_CODE', 'w-32')}
                 <TableHead className="w-20 text-right">Quantity</TableHead>
                 <TableHead className="w-20 text-right">Price</TableHead>
                 <TableHead className="w-20 text-right">Freight</TableHead>
                 <TableHead className="w-14 text-center">Line #</TableHead>
-                <TableHead className="w-24">Order #</TableHead>
-                {soExtraCols.map((c) => (
-                  <TableHead key={c.name} className="whitespace-nowrap px-3 font-medium">
-                    {formatColumnTitle(c.name)}
-                  </TableHead>
-                ))}
+                {renderHeaderWithFilter('Order #', 'ORDER_NUMBER', 'w-28')}
+                {soExtraCols.map((c) => renderHeaderWithFilter(formatColumnTitle(c.name), c.name))}
                 <TableHead className="min-w-72">SQL Message Column [RS_MESSAGE_TEXT]</TableHead>
               </TableRow>
             </TableHeader>
@@ -678,31 +750,27 @@ export const ImportAndGridView: React.FC<ImportAndGridViewProps> = ({
             <TableHeader>
               <TableRow className="border-b border-border/80 text-[11px] whitespace-nowrap">
                 <TableHead className="w-16 text-center">DBKey</TableHead>
-                <TableHead className="w-28">Status Flag</TableHead>
-                <TableHead className="w-16">Co</TableHead>
-                <TableHead className="w-12">Wh</TableHead>
-                <TableHead className="w-24">Part Code</TableHead>
-                <TableHead className="w-28">Lot Number</TableHead>
-                <TableHead className="w-28">Vendor Lot</TableHead>
-                <TableHead className="w-20">Bin</TableHead>
-                <TableHead className="w-16">IC Status</TableHead>
-                <TableHead className="w-16">UOM 1</TableHead>
+                {renderHeaderWithFilter('Status Flag', 'STATUS_FLAG', 'w-28')}
+                {renderHeaderWithFilter('Co', 'COMPANY_CODE', 'w-20')}
+                {renderHeaderWithFilter('Wh', 'WAREHOUSE', 'w-20')}
+                {renderHeaderWithFilter('Part Code', 'PART_CODE', 'w-32')}
+                {renderHeaderWithFilter('Lot Number', 'IC_LOT_NUMBER', 'w-32')}
+                {renderHeaderWithFilter('Vendor Lot', 'IC_VENDOR_LOT_NUMBER', 'w-32')}
+                {renderHeaderWithFilter('Bin', 'BIN_LOCATION', 'w-24')}
+                {renderHeaderWithFilter('IC Status', 'IC_STATUS_CODE', 'w-24')}
+                {renderHeaderWithFilter('UOM 1', 'UOM_1', 'w-24')}
                 <TableHead className="w-20 text-right">Qty 1</TableHead>
                 <TableHead className="w-20 text-right">Unit Cost</TableHead>
-                <TableHead className="w-16">UOM 2</TableHead>
+                {renderHeaderWithFilter('UOM 2', 'UOM_2', 'w-24')}
                 <TableHead className="w-20 text-right">Qty 2</TableHead>
-                <TableHead className="w-40">License Plate (LPN)</TableHead>
-                <TableHead className="w-32">Parent LPN</TableHead>
+                {renderHeaderWithFilter('License Plate (LPN)', 'DC_LICENSE_PLATE_ID', 'w-44')}
+                {renderHeaderWithFilter('Parent LPN', 'DC_PARENT_LICENSE_PLATE_ID', 'w-36')}
                 <TableHead className="w-14 text-center">Line</TableHead>
-                <TableHead className="w-24">Best Before</TableHead>
-                <TableHead className="w-24">Expiry Date</TableHead>
-                <TableHead className="w-24">Retest Date</TableHead>
-                <TableHead className="w-24">Create Date</TableHead>
-                {dcExtraCols.map((c) => (
-                  <TableHead key={c.name} className="whitespace-nowrap px-3 font-medium">
-                    {formatColumnTitle(c.name)}
-                  </TableHead>
-                ))}
+                {renderHeaderWithFilter('Best Before', 'BEST_BEFORE_DATE', 'w-28')}
+                {renderHeaderWithFilter('Expiry Date', 'BATCH_DATE', 'w-28')}
+                {renderHeaderWithFilter('Retest Date', 'IC_RETEST_DATE', 'w-28')}
+                {renderHeaderWithFilter('Create Date', 'CREATION_DATE', 'w-28')}
+                {dcExtraCols.map((c) => renderHeaderWithFilter(formatColumnTitle(c.name), c.name))}
                 <TableHead className="min-w-72">SQL Message Column [RS_MESSAGE_TEXT]</TableHead>
               </TableRow>
             </TableHeader>
