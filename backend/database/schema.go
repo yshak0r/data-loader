@@ -33,6 +33,38 @@ func InvalidateSchemaCache(domain string) {
 	}
 }
 
+// ResolveTableName returns the bracketed full table name and the bare table name.
+func ResolveTableName(domain string, targetTable string) (string, string) {
+	candidate := strings.TrimSpace(targetTable)
+	if candidate == "" {
+		candidate = strings.TrimSpace(domain)
+	}
+
+	if strings.EqualFold(candidate, "inventory") || strings.EqualFold(candidate, "dc") {
+		return "[FIN].[KAS_DC_LOADS]", "KAS_DC_LOADS"
+	}
+	if strings.EqualFold(candidate, "sales_orders") || strings.EqualFold(candidate, "so") {
+		return "[FIN].[KAS_SO_LOADS]", "KAS_SO_LOADS"
+	}
+
+	// Custom table handling: parse schema.table or default to FIN schema
+	if strings.Contains(candidate, ".") {
+		parts := strings.SplitN(candidate, ".", 2)
+		s := strings.Trim(parts[0], "[] ")
+		t := strings.Trim(parts[1], "[] ")
+		if s == "" {
+			s = "FIN"
+		}
+		return fmt.Sprintf("[%s].[%s]", s, t), t
+	}
+
+	bare := strings.Trim(candidate, "[] ")
+	if bare == "" {
+		return "[FIN].[KAS_DC_LOADS]", "KAS_DC_LOADS"
+	}
+	return fmt.Sprintf("[FIN].[%s]", bare), bare
+}
+
 // QueryTableSchema introspects physical columns of the staging table from SQL Server using an active *sql.DB.
 func QueryTableSchema(ctx context.Context, db *sql.DB, domain string) ([]models.ColumnDefinition, map[string]models.ColumnDefinition, error) {
 	schemaCacheMu.RLock()
@@ -42,12 +74,7 @@ func QueryTableSchema(ctx context.Context, db *sql.DB, domain string) ([]models.
 	}
 	schemaCacheMu.RUnlock()
 
-	tableName := "KAS_DC_LOADS"
-	if domain == "sales_orders" {
-		tableName = "KAS_SO_LOADS"
-	}
-
-	fullName := fmt.Sprintf("[FIN].[%s]", tableName)
+	fullName, tableName := ResolveTableName(domain, "")
 
 	query := `
 		SELECT 
@@ -63,7 +90,7 @@ func QueryTableSchema(ctx context.Context, db *sql.DB, domain string) ([]models.
 
 	rows, err := db.QueryContext(ctx, query, fullName, tableName)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to query table schema for [FIN].[%s]: %w", tableName, err)
+		return nil, nil, fmt.Errorf("failed to query table schema for %s: %w", fullName, err)
 	}
 	defer rows.Close()
 

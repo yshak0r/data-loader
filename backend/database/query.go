@@ -16,10 +16,7 @@ func (m *Manager) QueryGrid(ctx context.Context, params models.GridQueryParams) 
 	}
 
 	isSO := params.Domain == "sales_orders"
-	tableName := "[FIN].[KAS_DC_LOADS]"
-	if isSO {
-		tableName = "[FIN].[KAS_SO_LOADS]"
-	}
+	tableName, _ := ResolveTableName(params.Domain, params.TargetTable)
 
 	// Ensure the staging table exists if not already present
 	checkQuery := fmt.Sprintf("IF OBJECT_ID('%s', 'U') IS NULL SELECT 0 ELSE SELECT 1", tableName)
@@ -29,7 +26,11 @@ func (m *Manager) QueryGrid(ctx context.Context, params models.GridQueryParams) 
 	}
 
 	// Dynamically inspect existing physical columns from SQL Server
-	schemaCols, _, _ := m.GetTableSchema(ctx, params.Domain)
+	lookupDomain := params.Domain
+	if strings.TrimSpace(params.TargetTable) != "" {
+		lookupDomain = params.TargetTable
+	}
+	schemaCols, _, _ := m.GetTableSchema(ctx, lookupDomain)
 
 	page := params.Page
 	if page < 1 {
@@ -46,9 +47,18 @@ func (m *Manager) QueryGrid(ctx context.Context, params models.GridQueryParams) 
 	var args []any
 	argIdx := 1
 
-	// Status filter
+	// Check if table has STATUS_FLAG
+	hasStatusFlag := false
+	for _, c := range schemaCols {
+		if strings.EqualFold(c.Name, "STATUS_FLAG") {
+			hasStatusFlag = true
+			break
+		}
+	}
+
+	// Status filter (only applied if table contains STATUS_FLAG)
 	status := strings.TrimSpace(params.StatusFilter)
-	if status != "" && status != "ALL" {
+	if hasStatusFlag && status != "" && status != "ALL" {
 		if strings.EqualFold(status, "L") || strings.EqualFold(status, "P") || strings.EqualFold(status, "LOADED") {
 			conditions = append(conditions, "STATUS_FLAG IN ('L', 'P')")
 		} else if strings.EqualFold(status, "F") || strings.EqualFold(status, "FAILED") {
@@ -59,6 +69,42 @@ func (m *Manager) QueryGrid(ctx context.Context, params models.GridQueryParams) 
 			conditions = append(conditions, fmt.Sprintf("STATUS_FLAG = @p%d", argIdx))
 			args = append(args, status)
 			argIdx++
+		}
+	}
+
+	// Column-specific filters
+	if len(params.ColumnFilters) > 0 {
+		colMap := make(map[string]models.ColumnDefinition)
+		for _, c := range schemaCols {
+			colMap[strings.ToUpper(c.Name)] = c
+		}
+
+		for colName, filterVal := range params.ColumnFilters {
+			filterVal = strings.TrimSpace(filterVal)
+			if filterVal == "" {
+				continue
+			}
+			c, exists := colMap[strings.ToUpper(colName)]
+			if !exists {
+				continue
+			}
+
+			if strings.EqualFold(filterVal, "(Blanks)") || strings.EqualFold(filterVal, "(Blank)") {
+				conditions = append(conditions, fmt.Sprintf("(ISNULL([%s], '') = '')", c.Name))
+			} else if strings.EqualFold(filterVal, "(Non-Blanks)") || strings.EqualFold(filterVal, "(Non-Blank)") {
+				conditions = append(conditions, fmt.Sprintf("(ISNULL([%s], '') <> '')", c.Name))
+			} else {
+				lowerType := strings.ToLower(c.DataType)
+				if strings.Contains(lowerType, "datetime") || lowerType == "date" {
+					conditions = append(conditions, fmt.Sprintf("(CONVERT(VARCHAR(19), [%s], 120) LIKE @p%d OR CONVERT(VARCHAR(10), [%s], 120) = @p%d)", c.Name, argIdx, c.Name, argIdx))
+					args = append(args, filterVal+"%")
+					argIdx++
+				} else {
+					conditions = append(conditions, fmt.Sprintf("CONVERT(VARCHAR(500), [%s]) = @p%d", c.Name, argIdx))
+					args = append(args, filterVal)
+					argIdx++
+				}
+			}
 		}
 	}
 
@@ -99,19 +145,22 @@ func (m *Manager) QueryGrid(ctx context.Context, params models.GridQueryParams) 
 	}
 
 	// 2. Compute status counts breakdown across the whole table
-	// valid = only records with STATUS_FLAG = 'V' (passed dry-run, awaiting loader)
-	countsQuery := fmt.Sprintf(`
-		SELECT 
-			COUNT(*) AS total,
-			ISNULL(SUM(CASE WHEN STATUS_FLAG = 'V' THEN 1 ELSE 0 END), 0) AS valid,
-			ISNULL(SUM(CASE WHEN STATUS_FLAG = 'E' THEN 1 ELSE 0 END), 0) AS error,
-			ISNULL(SUM(CASE WHEN STATUS_FLAG IN ('L', 'P') THEN 1 ELSE 0 END), 0) AS loaded,
-			ISNULL(SUM(CASE WHEN STATUS_FLAG = 'F' THEN 1 ELSE 0 END), 0) AS failed
-		FROM %s
-	`, tableName)
-
 	var counts models.GridCounts
-	_ = db.QueryRowContext(ctx, countsQuery).Scan(&counts.Total, &counts.Valid, &counts.Error, &counts.Loaded, &counts.Failed)
+	if hasStatusFlag {
+		countsQuery := fmt.Sprintf(`
+			SELECT 
+				COUNT(*) AS total,
+				ISNULL(SUM(CASE WHEN STATUS_FLAG = 'V' THEN 1 ELSE 0 END), 0) AS valid,
+				ISNULL(SUM(CASE WHEN STATUS_FLAG = 'E' THEN 1 ELSE 0 END), 0) AS error,
+				ISNULL(SUM(CASE WHEN STATUS_FLAG IN ('L', 'P') THEN 1 ELSE 0 END), 0) AS loaded,
+				ISNULL(SUM(CASE WHEN STATUS_FLAG = 'F' THEN 1 ELSE 0 END), 0) AS failed
+			FROM %s
+		`, tableName)
+		_ = db.QueryRowContext(ctx, countsQuery).Scan(&counts.Total, &counts.Valid, &counts.Error, &counts.Loaded, &counts.Failed)
+	} else {
+		// Generic or custom table: simply count all rows
+		_ = db.QueryRowContext(ctx, fmt.Sprintf("SELECT COUNT(*) FROM %s", tableName)).Scan(&counts.Total)
+	}
 
 	// If no rows match, return early with empty slice and discovered column metadata
 	if totalFiltered == 0 {
@@ -139,9 +188,34 @@ func (m *Manager) QueryGrid(ctx context.Context, params models.GridQueryParams) 
 		}
 	}
 
-	primaryKeyCol := "GEM_DBKEY"
-	if isSO {
-		primaryKeyCol = "ID"
+	// Determine primary key or ordering column
+	primaryKeyCol := ""
+	for _, c := range schemaCols {
+		if c.IsIdentity {
+			primaryKeyCol = c.Name
+			break
+		}
+	}
+	if primaryKeyCol == "" {
+		if isSO {
+			primaryKeyCol = "ID"
+		} else {
+			primaryKeyCol = "GEM_DBKEY"
+		}
+	}
+	hasPk := false
+	for _, c := range schemaCols {
+		if strings.EqualFold(c.Name, primaryKeyCol) {
+			hasPk = true
+			primaryKeyCol = c.Name
+			break
+		}
+	}
+	if !hasPk && len(schemaCols) > 0 {
+		primaryKeyCol = schemaCols[0].Name
+	}
+	if primaryKeyCol == "" {
+		primaryKeyCol = "1"
 	}
 
 	selectClause := strings.Join(selectExpressions, ", ")
@@ -234,6 +308,107 @@ func (m *Manager) QueryGrid(ctx context.Context, params models.GridQueryParams) 
 		Counts:    counts,
 		Connected: true,
 		Columns:   schemaCols,
+	}, nil
+}
+
+// GetColumnDistinctValues returns unique values for a column up to limit (default 100), with optional search and blank indicator.
+func (m *Manager) GetColumnDistinctValues(ctx context.Context, params models.DistinctValuesParams) (*models.DistinctValuesResult, error) {
+	db, _, err := m.GetDB()
+	if err != nil {
+		return nil, err
+	}
+
+	tableName, _ := ResolveTableName(params.Domain, params.TargetTable)
+
+	lookupDomain := params.Domain
+	if strings.TrimSpace(params.TargetTable) != "" {
+		lookupDomain = params.TargetTable
+	}
+	schemaCols, _, err := m.GetTableSchema(ctx, lookupDomain)
+	if err != nil {
+		return nil, err
+	}
+
+	// Validate column exists in schema to strictly prevent SQL injection
+	var targetCol *models.ColumnDefinition
+	for _, c := range schemaCols {
+		if strings.EqualFold(c.Name, params.ColumnName) {
+			targetCol = &c
+			break
+		}
+	}
+	if targetCol == nil {
+		return nil, fmt.Errorf("column %q not found in table %s", params.ColumnName, tableName)
+	}
+
+	limit := params.Limit
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > 500 {
+		limit = 500
+	}
+
+	var whereParts []string
+	var args []any
+	argIdx := 1
+
+	whereParts = append(whereParts, fmt.Sprintf("[%s] IS NOT NULL", targetCol.Name))
+	whereParts = append(whereParts, fmt.Sprintf("CONVERT(VARCHAR(500), [%s]) <> ''", targetCol.Name))
+
+	search := strings.TrimSpace(params.Search)
+	if search != "" {
+		whereParts = append(whereParts, fmt.Sprintf("CONVERT(VARCHAR(500), [%s]) LIKE @p%d", targetCol.Name, argIdx))
+		args = append(args, "%"+search+"%")
+		argIdx++
+	}
+
+	whereClause := "WHERE " + strings.Join(whereParts, " AND ")
+	query := fmt.Sprintf(`
+		SELECT DISTINCT TOP (%d)
+			ISNULL(CONVERT(VARCHAR(500), [%s]), '') AS val
+		FROM %s
+		%s
+		ORDER BY val ASC
+	`, limit+1, targetCol.Name, tableName, whereClause)
+
+	rows, err := db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query distinct values for %s: %w", targetCol.Name, err)
+	}
+	defer rows.Close()
+
+	var values []string
+	for rows.Next() {
+		var val string
+		if err := rows.Scan(&val); err != nil {
+			continue
+		}
+		trimmed := strings.TrimSpace(val)
+		if trimmed != "" {
+			values = append(values, trimmed)
+		}
+	}
+
+	truncated := false
+	if len(values) > limit {
+		truncated = true
+		values = values[:limit]
+	}
+
+	// Check if column has any blanks or nulls in the table
+	hasBlanks := false
+	blankCheckQuery := fmt.Sprintf("SELECT TOP 1 1 FROM %s WHERE [%s] IS NULL OR CONVERT(VARCHAR(500), [%s]) = ''", tableName, targetCol.Name, targetCol.Name)
+	var dummy int
+	if err := db.QueryRowContext(ctx, blankCheckQuery).Scan(&dummy); err == nil && dummy == 1 {
+		hasBlanks = true
+	}
+
+	return &models.DistinctValuesResult{
+		Values:     values,
+		TotalCount: len(values),
+		Truncated:  truncated,
+		HasBlanks:  hasBlanks,
 	}, nil
 }
 

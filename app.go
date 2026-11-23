@@ -189,6 +189,10 @@ func (a *App) QueryGrid(params models.GridQueryParams) (*models.GridQueryResult,
 	return a.dbManager.QueryGrid(a.ctx, params)
 }
 
+func (a *App) GetColumnDistinctValues(params models.DistinctValuesParams) (*models.DistinctValuesResult, error) {
+	return a.dbManager.GetColumnDistinctValues(a.ctx, params)
+}
+
 func (a *App) ExportData(filter string, domain string) (string, error) {
 	return a.dbManager.ExportData(a.ctx, filter, domain)
 }

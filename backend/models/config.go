@@ -37,11 +37,30 @@ type GridCounts struct {
 
 // GridQueryParams contains grid filtering and pagination criteria.
 type GridQueryParams struct {
-	Page         int    `json:"page"`
-	PageSize     int    `json:"pageSize"`
-	StatusFilter string `json:"statusFilter"`
-	Search       string `json:"search"`
-	Domain       string `json:"domain"` // "inventory" | "sales_orders"
+	Page          int               `json:"page"`
+	PageSize      int               `json:"pageSize"`
+	StatusFilter  string            `json:"statusFilter"`
+	Search        string            `json:"search"`
+	Domain        string            `json:"domain"` // "inventory" | "sales_orders"
+	TargetTable   string            `json:"targetTable,omitempty"`
+	ColumnFilters map[string]string `json:"columnFilters,omitempty"`
+}
+
+// DistinctValuesParams queries distinct values for a given column with optional search.
+type DistinctValuesParams struct {
+	Domain      string `json:"domain"`
+	TargetTable string `json:"targetTable,omitempty"`
+	ColumnName  string `json:"columnName"`
+	Search      string `json:"search,omitempty"`
+	Limit       int    `json:"limit,omitempty"`
+}
+
+// DistinctValuesResult returns distinct values and total unique count.
+type DistinctValuesResult struct {
+	Values     []string `json:"values"`
+	TotalCount int      `json:"totalCount"`
+	Truncated  bool     `json:"truncated"`
+	HasBlanks  bool     `json:"hasBlanks"`
 }
 
 // ColumnDefinition provides frontend metadata for dynamically introspected columns.
