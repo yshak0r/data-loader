@@ -24,6 +24,10 @@ import {
   Boxes,
   ShoppingCart,
   ExternalLink,
+  Eraser,
+  Table2,
+  Code2,
+  History,
 } from 'lucide-react';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '../ui/card';
 import { Badge } from '../ui/badge';
@@ -99,7 +103,7 @@ export const DocumentationView: React.FC = () => {
                   </div>
                   <p className="text-xs text-muted-foreground max-w-2xl leading-relaxed">
                     Designed for automated, high-speed ingestion of opening inventory balances and sales orders into Ross ERP.
-                    Follow the 6 stages below to connect, stage, validate, simulate, and commit your batches safely.
+                    Follow the 7 stages below to connect, stage, validate, reset warehouse balances (if required), simulate, and commit your batches safely.
                   </p>
                 </div>
                 <div className="flex items-center gap-2">
@@ -161,31 +165,31 @@ export const DocumentationView: React.FC = () => {
                     </div>
                   </div>
                   <CardTitle className="text-sm font-semibold text-foreground mt-2">
-                    Choose Loader Domain
+                    Choose Table & Schema
                   </CardTitle>
                   <CardDescription className="text-xs text-muted-foreground">
-                    Select Inventory or Sales Orders.
+                    Select Standard Domains or Custom Staging Tables.
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="text-xs text-muted-foreground space-y-2 pt-0">
                   <p>
-                    Use the domain switcher dropdown in the top header to toggle between:
+                    Use the <strong>Table Switcher</strong> in the top header to choose standard loaders or any custom table:
                   </p>
                   <div className="space-y-1.5 pt-1">
                     <div className="p-2 rounded bg-secondary/40 border border-border/60">
                       <span className="font-medium text-foreground flex items-center gap-1.5">
-                        <Boxes className="w-3.5 h-3.5 text-blue-500" /> DC Inventory
+                        <Boxes className="w-3.5 h-3.5 text-blue-500" /> Standard: DC Inventory / Sales Orders
                       </span>
                       <p className="text-[11px] text-muted-foreground mt-0.5">
-                        Opening stock balances, LPN pallets, lot tracking, and warehouse initialization.
+                        Pre-configured <code className="font-mono text-foreground">[FIN].[KAS_DC_LOADS]</code> & <code className="font-mono text-foreground">[FIN].[KAS_SO_LOADS]</code> with built-in Ross rules.
                       </p>
                     </div>
                     <div className="p-2 rounded bg-secondary/40 border border-border/60">
                       <span className="font-medium text-foreground flex items-center gap-1.5">
-                        <ShoppingCart className="w-3.5 h-3.5 text-emerald-500" /> Sales Orders
+                        <Table2 className="w-3.5 h-3.5 text-indigo-500" /> Custom Staging Tables & Views
                       </span>
                       <p className="text-[11px] text-muted-foreground mt-0.5">
-                        Customer orders, header terms, shipping details, and detail order line items.
+                        Filter by schema pills (<code className="font-mono text-foreground">dbo</code>, <code className="font-mono text-foreground">FIN</code>, etc.) and stream into any user table or view.
                       </p>
                     </div>
                   </div>
@@ -271,6 +275,39 @@ export const DocumentationView: React.FC = () => {
                     <Badge variant="outline" className="font-mono text-[10px] text-muted-foreground">
                       STAGE 05
                     </Badge>
+                    <div className="w-7 h-7 rounded-lg bg-rose-500/10 text-rose-600 dark:text-rose-400 flex items-center justify-center">
+                      <Eraser className="w-4 h-4" />
+                    </div>
+                  </div>
+                  <CardTitle className="text-sm font-semibold text-foreground mt-2">
+                    Clean Inventory Tables (Optional)
+                  </CardTitle>
+                  <CardDescription className="text-xs text-muted-foreground">
+                    Scoped live ERP inventory purge for staged warehouses.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="text-xs text-muted-foreground space-y-2 pt-0">
+                  <p>
+                    When loading opening stock balances, existing ERP records in target warehouses can create balance conflicts:
+                  </p>
+                  <ul className="list-disc list-inside space-y-1 text-[11px] text-muted-foreground pl-1">
+                    <li><strong className="text-foreground">Scoped Warehouse Reset:</strong> Purges live inventory <em>only</em> for warehouses identified in your current staged dataset.</li>
+                    <li><strong className="text-foreground">Safety Record Count Preview:</strong> Automatically scans and displays live row counts across Ross inventory tables before any purge occurs.</li>
+                    <li><strong className="text-foreground">Confirmation Required:</strong> Requires entering <code className="font-mono text-foreground font-bold">CLEAN</code> to prevent unintended data loss.</li>
+                  </ul>
+                  <p className="text-[11px] text-muted-foreground pt-1 border-t border-border/50">
+                    <strong className="text-foreground">Note:</strong> Different from <em>Clear Staged Data</em> (which only flushes the temporary staging table buffer).
+                  </p>
+                </CardContent>
+              </Card>
+
+              {/* Step 6 */}
+              <Card className="bg-card border-border hover:border-primary/40 transition-colors shadow-sm flex flex-col justify-between">
+                <CardHeader className="pb-3">
+                  <div className="flex items-center justify-between">
+                    <Badge variant="outline" className="font-mono text-[10px] text-muted-foreground">
+                      STAGE 06
+                    </Badge>
                     <div className="w-7 h-7 rounded-lg bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 flex items-center justify-center">
                       <PlayCircle className="w-4 h-4" />
                     </div>
@@ -295,12 +332,12 @@ export const DocumentationView: React.FC = () => {
                 </CardContent>
               </Card>
 
-              {/* Step 6 */}
+              {/* Step 7 */}
               <Card className="bg-card border-border hover:border-primary/40 transition-colors shadow-sm flex flex-col justify-between">
                 <CardHeader className="pb-3">
                   <div className="flex items-center justify-between">
                     <Badge variant="outline" className="font-mono text-[10px] text-muted-foreground">
-                      STAGE 06
+                      STAGE 07
                     </Badge>
                     <div className="w-7 h-7 rounded-lg bg-cyan-500/10 text-cyan-600 dark:text-cyan-400 flex items-center justify-center">
                       <FileDown className="w-4 h-4" />
@@ -338,13 +375,21 @@ export const DocumentationView: React.FC = () => {
                   Key Operational Shortcuts & Actions
                 </CardTitle>
               </CardHeader>
-              <CardContent className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs text-muted-foreground">
+              <CardContent className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3 text-xs text-muted-foreground">
                 <div className="p-3 rounded-lg bg-secondary/30 border border-border space-y-1">
                   <span className="font-semibold text-foreground flex items-center gap-1.5">
                     <Trash2 className="w-3.5 h-3.5 text-muted-foreground" /> Clear Staged Data
                   </span>
                   <p className="text-[11px]">
-                    Use the trash icon in the header toolbar anytime you want to clear your current staging batch and upload a fresh CSV. Does not alter ERP master tables.
+                    Use the trash icon in the header toolbar to flush current staging buffer (<code className="font-mono text-foreground">[FIN].[KAS_DC_LOADS]</code>). Zero effect on Ross ERP live tables.
+                  </p>
+                </div>
+                <div className="p-3 rounded-lg bg-secondary/30 border border-border space-y-1">
+                  <span className="font-semibold text-rose-600 dark:text-rose-400 flex items-center gap-1.5">
+                    <Eraser className="w-3.5 h-3.5" /> Clean Inventory Tables
+                  </span>
+                  <p className="text-[11px]">
+                    Purges live ERP inventory <em>only for staged warehouses</em> to prep for opening balances. Requires <code className="font-mono text-foreground font-bold">CLEAN</code> confirmation.
                   </p>
                 </div>
                 <div className="p-3 rounded-lg bg-secondary/30 border border-border space-y-1">
@@ -352,15 +397,15 @@ export const DocumentationView: React.FC = () => {
                     <RefreshCw className="w-3.5 h-3.5 text-muted-foreground" /> Dynamic Re-Validation
                   </span>
                   <p className="text-[11px]">
-                    If master data in Ross ERP was updated by another user (e.g. product enabled, bin created), simply re-click <strong>Run Dry Run</strong> to re-evaluate all rows.
+                    If master data in Ross ERP was updated (e.g. part enabled, bin created), re-click <strong>Run Dry Run</strong> to re-evaluate all rows.
                   </p>
                 </div>
                 <div className="p-3 rounded-lg bg-secondary/30 border border-border space-y-1">
                   <span className="font-semibold text-foreground flex items-center gap-1.5">
-                    <Boxes className="w-3.5 h-3.5 text-muted-foreground" /> Order Grouping & Hierarchy
+                    <Table2 className="w-3.5 h-3.5 text-muted-foreground" /> Custom Tables & DDL
                   </span>
                   <p className="text-[11px]">
-                    Switch to <strong>Order Hierarchy</strong> when working in Sales Orders to inspect consolidated customer headers, detail line items, and totals visually.
+                    Switch between schemas with 1-click pills, create custom staging tables, and reuse saved creation queries to drop and re-create.
                   </p>
                 </div>
               </CardContent>
@@ -622,6 +667,98 @@ export const DocumentationView: React.FC = () => {
                 </CardContent>
               </Card>
             </div>
+
+            {/* Standard vs Custom Staging Tables & Dynamic Schema Discovery */}
+            <Card className="bg-card border-border space-y-4">
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <Badge variant="outline" className="border-indigo-500/30 text-indigo-600 dark:text-indigo-400 bg-indigo-500/10">
+                    Schema & Table Architecture
+                  </Badge>
+                  <Table2 className="w-5 h-5 text-indigo-500" />
+                </div>
+                <CardTitle className="text-sm font-semibold text-foreground">
+                  Standard Tables vs. Custom Staging Tables & Schema Filtering
+                </CardTitle>
+                <CardDescription className="text-xs text-muted-foreground">
+                  How the loader discovers, categorizes, and streams records into standard Ross ERP and custom database tables.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4 text-xs text-muted-foreground pt-0">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {/* Standard Tables */}
+                  <div className="p-3.5 rounded-lg bg-secondary/30 border border-border space-y-2">
+                    <div className="flex items-center gap-2 text-foreground font-semibold">
+                      <Boxes className="w-4 h-4 text-blue-500" />
+                      Standard Tables ([FIN].[KAS_DC_LOADS] & [FIN].[KAS_SO_LOADS])
+                    </div>
+                    <p className="text-[11px] leading-relaxed">
+                      Pre-wired staging tables specifically mapped to Ross ERP core import routines. They include pre-built Dry Run SQL validation scripts, Error Inspector rules, ERP commit procedures, and warehouse-level inventory cleaning.
+                    </p>
+                    <ul className="list-disc list-inside text-[11px] space-y-0.5 text-muted-foreground pl-1">
+                      <li>Full pipeline support: Pending &rarr; Validated &rarr; Committed / Failed</li>
+                      <li>Automated schema initialization on database connection</li>
+                    </ul>
+                  </div>
+
+                  {/* Custom Staging Tables */}
+                  <div className="p-3.5 rounded-lg bg-secondary/30 border border-border space-y-2">
+                    <div className="flex items-center gap-2 text-foreground font-semibold">
+                      <Code2 className="w-4 h-4 text-indigo-500" />
+                      Custom Staging Tables & Views (Any Schema)
+                    </div>
+                    <p className="text-[11px] leading-relaxed">
+                      Supports ingesting CSV datasets into any user-defined table or view across all user schemas (<code className="font-mono text-foreground">dbo</code>, <code className="font-mono text-foreground">FIN</code>, etc.). Automatically introspects column types, nullable flags, and max lengths.
+                    </p>
+                    <ul className="list-disc list-inside text-[11px] space-y-0.5 text-muted-foreground pl-1">
+                      <li>Universal CSV streaming matching any table column structure</li>
+                      <li>Introspects both user tables and views (<code className="font-mono">is_ms_shipped = 0</code>)</li>
+                    </ul>
+                  </div>
+                </div>
+
+                {/* Table Switcher & Schema Pills */}
+                <div className="p-4 rounded-lg bg-secondary/20 border border-border space-y-2.5">
+                  <h5 className="font-semibold text-foreground text-xs uppercase tracking-wide flex items-center gap-2">
+                    <Sparkles className="w-3.5 h-3.5 text-amber-500" />
+                    Interactive Table Switcher & Schema Filter Pills
+                  </h5>
+                  <p className="text-[11px] leading-relaxed">
+                    Click the <strong>Table Switcher</strong> button in the top navigation bar to open the table drawer.
+                  </p>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5 text-[11px]">
+                    <div className="p-2.5 rounded bg-card border border-border/70 space-y-1">
+                      <span className="font-medium text-foreground">1-Click Schema Pills</span>
+                      <p className="text-muted-foreground">Filter discovered tables instantly by clicking schema pills like <code className="font-mono text-foreground">[All]</code>, <code className="font-mono text-foreground">[dbo]</code>, or <code className="font-mono text-foreground">[FIN]</code> with live table counts.</p>
+                    </div>
+                    <div className="p-2.5 rounded bg-card border border-border/70 space-y-1">
+                      <span className="font-medium text-foreground">Real-Time Search</span>
+                      <p className="text-muted-foreground">Type any table or schema substring to instantly narrow down matches across your entire SQL Server database catalog.</p>
+                    </div>
+                    <div className="p-2.5 rounded bg-card border border-border/70 space-y-1">
+                      <span className="font-medium text-foreground">Active Table Indicator</span>
+                      <p className="text-muted-foreground">The currently selected table is highlighted with a green check badge and dynamically updates the Data Grid column headers and row count.</p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Custom Table DDL Creation & Retention */}
+                <div className="p-4 rounded-lg bg-secondary/20 border border-border space-y-2.5">
+                  <h5 className="font-semibold text-foreground text-xs uppercase tracking-wide flex items-center gap-2">
+                    <History className="w-3.5 h-3.5 text-indigo-400" />
+                    Custom Table DDL Retention & Re-Creation Workflow
+                  </h5>
+                  <p className="text-[11px] leading-relaxed">
+                    Under the <strong>Manage Custom Tables</strong> modal:
+                  </p>
+                  <ul className="list-disc list-inside space-y-1.5 text-[11px] text-muted-foreground pl-1">
+                    <li><strong className="text-foreground">Automatic Query Retention:</strong> Whenever you execute a table creation script, the tool automatically stores the full DDL script in your local catalog. You can recall it anytime from the <em>Saved Creation Scripts</em> dropdown.</li>
+                    <li><strong className="text-foreground">Edit & Re-Create in 1-Click:</strong> In the <em>Drop Table</em> tab, click <strong>Load DDL to Edit / Re-create</strong> on any table. The tool loads the exact saved creation script (or reverse-engineers DDL from live SQL Server schema if created externally) directly into the DDL editor so you can modify columns, drop the table, and execute the updated script immediately.</li>
+                    <li><strong className="text-foreground">Multi-Batch Execution:</strong> Supports <code className="font-mono text-foreground">GO</code> batch delimiters for schema existence checks and table creation in a single transaction.</li>
+                  </ul>
+                </div>
+              </CardContent>
+            </Card>
           </TabsContent>
 
           {/* TAB 4: SQL SCRIPTS CONFIG */}
@@ -754,6 +891,42 @@ export const DocumentationView: React.FC = () => {
                 <CardContent className="text-xs text-muted-foreground pt-0 px-4 pb-3 leading-relaxed">
                   Yes. Lines starting with <code className="font-mono text-foreground font-semibold">!</code> (standard IAF comment markers) are ignored.
                   Column headers are automatically normalized, meaning headers like <code className="font-mono text-foreground">Quantity 1</code>, <code className="font-mono text-foreground">QUANTITY_1</code>, <code className="font-mono text-foreground">uom 1</code>, and <code className="font-mono text-foreground">Best Before Date</code> are automatically recognized.
+                </CardContent>
+              </Card>
+
+              <Card className="bg-card border-border">
+                <CardHeader className="py-3 px-4">
+                  <CardTitle className="text-xs font-semibold text-foreground flex items-center gap-2">
+                    <HelpCircle className="w-4 h-4 text-primary" />
+                    What is the difference between "Clear Staged Data" and "Clean Inventory Tables"?
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="text-xs text-muted-foreground pt-0 px-4 pb-3 leading-relaxed space-y-1.5">
+                  <p>
+                    <strong className="text-foreground">Clear Staged Data (Trash icon):</strong> Truncates only the temporary staging table buffer (<code className="font-mono text-foreground">[FIN].[KAS_DC_LOADS]</code> or <code className="font-mono text-foreground">[FIN].[KAS_SO_LOADS]</code>). It never alters live ERP ledgers or warehouse inventory. Use this whenever you want to discard staged file rows and upload a new CSV file.
+                  </p>
+                  <p>
+                    <strong className="text-foreground">Clean Inventory Tables (Eraser action):</strong> Performs a targeted, warehouse-scoped purge of live Ross ERP inventory records <em>only</em> for the warehouses included in your staged dataset. It scans live tables (<code className="font-mono">INVENTORY_BALANCE</code>, <code className="font-mono">LPN_RECORDS</code>), presents a pre-flight count verification, and asks for confirmation (<code className="font-mono">CLEAN</code>) before purging. Use this to prepare warehouses for clean opening balances.
+                  </p>
+                </CardContent>
+              </Card>
+
+              <Card className="bg-card border-border">
+                <CardHeader className="py-3 px-4">
+                  <CardTitle className="text-xs font-semibold text-foreground flex items-center gap-2">
+                    <HelpCircle className="w-4 h-4 text-primary" />
+                    How do I create, modify, or re-create custom staging tables across schemas?
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="text-xs text-muted-foreground pt-0 px-4 pb-3 leading-relaxed space-y-1.5">
+                  <p>
+                    Click the <strong>Table Switcher</strong> button in the top navigation bar and select <strong>Manage Custom Tables</strong>.
+                  </p>
+                  <ul className="list-disc list-inside space-y-1 pl-1">
+                    <li><strong className="text-foreground">Create:</strong> Execute any DDL script on the <em>Create / Alter Table (DDL)</em> tab. The tool saves your executed script into the <em>Saved Creation Scripts</em> catalog automatically.</li>
+                    <li><strong className="text-foreground">Edit & Re-Create:</strong> Under the <em>Drop Table</em> tab, select your table and click <strong>Load DDL to Edit / Re-create</strong>. The tool restores your original creation query (or reverse-engineers DDL from live column metadata if created externally) directly into the editor. You can then drop the table and execute the updated script in seconds.</li>
+                    <li><strong className="text-foreground">Filter by Schema:</strong> Use the interactive schema pills (<code className="font-mono">[All]</code>, <code className="font-mono">[dbo]</code>, <code className="font-mono">[FIN]</code>) in the Table Switcher to instantly locate your tables.</li>
+                  </ul>
                 </CardContent>
               </Card>
             </div>
