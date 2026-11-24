@@ -1,68 +1,54 @@
-/** Object: Table [FIN].[KAS_SO_LOADS] **/
-
-SET ANSI_NULLS ON;
-GO
-
-SET QUOTED_IDENTIFIER ON;
-GO
-
-IF OBJECT_ID(N'[FIN].[KAS_SO_LOADS]', N'U') IS NULL
+IF OBJECT_ID(N'FIN.KAS_SO_EXPORT_LOADS', N'U') IS NULL
 BEGIN
-
-    CREATE TABLE [FIN].[KAS_SO_LOADS]
+    CREATE TABLE FIN.KAS_SO_EXPORT_LOADS
     (
-        [ID] [int] IDENTITY(1,1) NOT NULL,
+        ID                          INT IDENTITY(1,1) PRIMARY KEY,
 
-        [COMPANY_CODE] [varchar](10) NOT NULL,
-        [DIVISION] [varchar](2) NOT NULL,
+        COMPANY_CODE                VARCHAR(10)      NULL,
+        DIVISION                    VARCHAR(2)       NULL,
+        ORDER_NUMBER                VARCHAR(9)       NULL,
 
-        [ORDER_NUMBER] [varchar](20) NULL,
-        [ORDER_LINE_NUMBER] [int] NULL,
-        [ORDER_DATE] [datetime] NULL,
+        SYS_TRANS_TERM_CODE         VARCHAR(20)      NULL,
+        SYS_NBR_OF_CONTAINERS       DECIMAL(10,0)    NULL,
+        SYS_CONTAINER_TYPE          VARCHAR(20)      NULL,
+        SYS_CONTAINER_SIZE          VARCHAR(20)      NULL,
+        SYS_MOT_CODE                VARCHAR(20)      NULL,
+        SYS_INCOTERM_CODE           VARCHAR(20)      NULL,
+        SYS_INCOTERM_CITY           VARCHAR(60)      NULL,
 
-        [CUSTOMER_NUMBER] [varchar](8) NULL,
-        [DELIVERY_ADDRESS_CODE] [varchar](10) NULL,
-        [CUSTOMER_REFERENCE] [varchar](25) NULL,
-		[EDI_ORDER] [char](1) NULL,
+        SYS_SIGNATORY_NAME          VARCHAR(60)      NULL,
+        SYS_LC_NUMBER               VARCHAR(40)      NULL,
+        SYS_CARRIER_ADVICE_NUMBER   VARCHAR(40)      NULL,
+        SYS_INSPECTION_NUMBER       VARCHAR(40)      NULL,
+        SYS_SHIPPING_LINE           VARCHAR(60)      NULL,
+        SYS_INSUR_CERT_NUMBER       VARCHAR(40)      NULL,
+        SYS_CUSTOMS_REF_STATUS      VARCHAR(40)      NULL,
 
-        [SYS_DELIVERY_DATE] [datetime] NULL,
-        [WAREHOUSE] [varchar](2) NULL,
+        SYS_EXPORT_EXIT_PORT        VARCHAR(60)      NULL,
+        SYS_EXPORT_DEST_PORT        VARCHAR(60)      NULL,
+        SYS_EXPORT_ADDL_INFO_1      VARCHAR(100)     NULL,
+        SYS_EXPORT_ADDL_INFO_2      VARCHAR(100)     NULL,
 
-        [PART_CODE] [varchar](15) NULL,
-        [QUANTITY] [decimal](18,4) NULL,
+        SYS_FRT_FORWARDER_NBR       VARCHAR(40)      NULL,
+        SYS_BOOKING_NUMBER          VARCHAR(40)      NULL,
+        SYS_VESSEL_NAME             VARCHAR(60)      NULL,
+        SYS_VOYAGE_NUMBER           VARCHAR(40)      NULL,
+        SYS_CONTAINER_NUMBER        VARCHAR(40)      NULL,
 
-        [SALES_PRICE] [decimal](18,4) NULL,
-        [UNIT_SALES] [varchar](10) NULL,
-        [FREIGHT] [decimal](18,4) NULL,
+        SYS_SAIL_DATE               DATETIME         NULL,
+        SYS_RAIL_DATE               DATETIME         NULL,
+        SYS_CUT_OFF_DATE            DATETIME         NULL,
+        SYS_LAYCAN_FROM_DATE        DATETIME         NULL,
+        SYS_LAYCAN_TO_DATE          DATETIME         NULL,
 
-        [STATUS_FLAG] [char](1) NULL,
-        [RS_MESSAGE_TEXT] [varchar](500) NULL,
+        SYS_EXPORT_NOTE_TYPE        VARCHAR(20)      NULL,
+        SYS_EXPORT_NOTE_CODE        VARCHAR(20)      NULL,
+        SYS_EXPORT_NOTES            VARCHAR(MAX)     NULL,
 
-        [CREATED_DATE] [datetime] NULL,
-        [PROCESSED_DATE] [datetime] NULL,
-
-        CONSTRAINT [PK_KAS_SO_LOADS]
-        PRIMARY KEY CLUSTERED
-        (
-            [ID] ASC
-        )
-        WITH
-        (
-            STATISTICS_NORECOMPUTE = OFF,
-            IGNORE_DUP_KEY = OFF,
-            OPTIMIZE_FOR_SEQUENTIAL_KEY = OFF
-        )
-        ON [PRIMARY]
-
-    ) ON [PRIMARY];
-
-    PRINT 'Table FIN.KAS_SO_LOADS created successfully.';
-
-END
-ELSE
-BEGIN
-
-    PRINT 'Table FIN.KAS_SO_LOADS already exists. No changes made.';
-
+        -- Result columns (same meaning as on KAS_SO_LOADS)
+        STATUS_FLAG                 VARCHAR(1)       NULL,
+        RS_MESSAGE_TEXT             VARCHAR(500)     NULL,
+        PROCESSED_DATE              DATETIME         NULL
+    );
 END;
 GO

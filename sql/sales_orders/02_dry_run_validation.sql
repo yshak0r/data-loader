@@ -14,6 +14,9 @@
 --     staging row (KAS_SO_LOADS.UNIT_SALES) must equal PRODUCT_MASTER.UNIT_SALES
 --   * sales/price UOM checks
 --   * QUANTITY  / price / freight / date sanity
+--   * shipping fields (Rule 15): SYS_SHIPPING_DATE not after the delivery date (nor before the order
+--     date), SOP_SHIPPING_TERMS_CODE defined in CUSTOMER_ADDRESSES, TP_PRICING_CODE /
+--     SOP_SHIPPING_TERMS_CODE not longer than the target columns
 --   * duplicate staging lines
 --   * order groups that already contain processed rows
 --   * company exists and has an SO numbering row (SOP_TRANSACTION_TYPES)
@@ -39,6 +42,16 @@ DECLARE @LOCK_RC        INT;
 DECLARE @MSG_MAX INT = (SELECT ISNULL(
     COLUMNPROPERTY(OBJECT_ID('FIN.KAS_SO_LOADS'), 'RS_MESSAGE_TEXT', 'charmaxlen'), -1));
 IF @MSG_MAX < 1 SET @MSG_MAX = 4000;
+
+-- ---- Rule 15 (shipping fields) settings
+DECLARE @SHIP_TERMS_MATCH_ADDRESS BIT = 1;  -- 1 = a staging SOP_SHIPPING_TERMS_CODE must be the code defined on the order's
+                                            --     DELIVERY address (CUSTOMER_ADDRESSES); 0 = defined on ANY address of the customer
+-- widest value the loader can store (smallest of header / line column); NULL = unknown, length check skipped
+DECLARE @SST_MAX INT = (SELECT MIN(T.L) FROM (VALUES
+    (CAST(COLUMNPROPERTY(OBJECT_ID('FIN.SALES_ORDER_HEADERS'), 'SOP_SHIPPING_TERMS_CODE', 'charmaxlen') AS INT)),
+    (CAST(COLUMNPROPERTY(OBJECT_ID('FIN.SALES_ORDER_LINES'),   'SOP_SHIPPING_TERMS_CODE', 'charmaxlen') AS INT))) T(L)
+    WHERE T.L > 0);
+DECLARE @TPC_MAX INT = (SELECT NULLIF(CAST(COLUMNPROPERTY(OBJECT_ID('FIN.SALES_ORDER_LINES'), 'TP_PRICING_CODE', 'charmaxlen') AS INT), -1));
 
 -- ---- Export staging (FIN.KAS_SO_EXPORT_LOADS) settings
 DECLARE @EXP_ENFORCE_DATES      BIT = 1;    -- 1 = sail / rail / cut-off / laycan dates later than the order delivery
@@ -134,7 +147,8 @@ SELECT
         X.R10_msg,
         X.R11_msg,
         X.R12_msg,
-        X.R14a_msg, X.R14b_msg, X.R14c_msg, X.R14d_msg, X.R14e_msg, X.R14f_msg, X.R14g_msg, X.R14h_msg, X.R14i_msg, X.R14j_msg
+        X.R14a_msg, X.R14b_msg, X.R14c_msg, X.R14d_msg, X.R14e_msg, X.R14f_msg, X.R14g_msg, X.R14h_msg, X.R14i_msg, X.R14j_msg,
+        X.R15a_msg, X.R15b_msg, X.R15c_msg, X.R15d_msg, X.R15e_msg
     ), 1, 2, ''), '') AS MSG,
     -- one flag per rule, so the summary does not depend on message text
     CASE WHEN CONCAT(X.R1a_msg, X.R1b_msg, X.R1c_msg, X.R1d_msg, X.R1e_msg, X.R1f_msg,
@@ -152,6 +166,7 @@ SELECT
     CASE WHEN X.R11_msg <> '' THEN 1 ELSE 0 END AS F11,
     CASE WHEN X.R12_msg <> '' THEN 1 ELSE 0 END AS F12,
     CASE WHEN CONCAT(X.R14a_msg, X.R14b_msg, X.R14c_msg, X.R14d_msg, X.R14e_msg, X.R14f_msg, X.R14g_msg, X.R14h_msg, X.R14i_msg, X.R14j_msg) <> '' THEN 1 ELSE 0 END AS F14,
+    CASE WHEN CONCAT(X.R15a_msg, X.R15b_msg, X.R15c_msg, X.R15d_msg, X.R15e_msg) <> '' THEN 1 ELSE 0 END AS F15,
     CAST(0 AS INT) AS F13
 INTO #R
 FROM K0 K
@@ -536,7 +551,44 @@ CROSS APPLY (SELECT
           AND LTRIM(RTRIM(K.UNIT_SALES)) <> LTRIM(RTRIM(K.PM_UNIT_SALES))
          THEN CONCAT('; Staging UNIT_SALES ', K.UNIT_SALES, ' does not match PRODUCT_MASTER.UNIT_SALES ',
                      K.PM_UNIT_SALES, ' of part ', K.PART_CODE)
-         ELSE '' END AS R14j_msg
+         ELSE '' END AS R14j_msg,
+
+    -- ---- RULE 15: shipping fields (SYS_SHIPPING_DATE, SOP_SHIPPING_TERMS_CODE, TP_PRICING_CODE)
+    -- 15a: shipping date cannot be after the delivery date (compared as dates, time of day ignored)
+    CASE WHEN K.SYS_SHIPPING_DATE IS NOT NULL
+          AND K.SYS_DELIVERY_DATE IS NOT NULL
+          AND CAST(K.SYS_SHIPPING_DATE AS DATE) > CAST(K.SYS_DELIVERY_DATE AS DATE)
+         THEN '; SYS_SHIPPING_DATE cannot be after SYS_DELIVERY_DATE' ELSE '' END AS R15a_msg,
+    -- 15b: shipping date cannot be before the order date
+    CASE WHEN K.SYS_SHIPPING_DATE IS NOT NULL
+          AND K.ORDER_DATE IS NOT NULL
+          AND CAST(K.SYS_SHIPPING_DATE AS DATE) < CAST(K.ORDER_DATE AS DATE)
+         THEN '; SYS_SHIPPING_DATE cannot be before ORDER_DATE' ELSE '' END AS R15b_msg,
+    -- 15c: a staging shipping terms code must exist on the customer's address(es). Blank is fine:
+    --      the loader then takes the code from CUSTOMER_ADDRESSES, then CUSTOMERS.
+    CASE WHEN NULLIF(LTRIM(RTRIM(K.SOP_SHIPPING_TERMS_CODE)), '') IS NOT NULL
+          AND C.CUSTOMER_NUMBER IS NOT NULL
+          AND ( (@SHIP_TERMS_MATCH_ADDRESS = 1
+                 AND CA.ADDRESS_CODE IS NOT NULL      -- a missing delivery address is reported by Rule 4
+                 AND ISNULL(LTRIM(RTRIM(CA.SOP_SHIPPING_TERMS_CODE)), '') <> LTRIM(RTRIM(K.SOP_SHIPPING_TERMS_CODE)))
+             OR (@SHIP_TERMS_MATCH_ADDRESS = 0
+                 AND NOT EXISTS (SELECT 1 FROM FIN.CUSTOMER_ADDRESSES A
+                                 WHERE A.COMPANY_CODE    = K.COMPANY_CODE
+                                   AND A.DIVISION        = K.DIVISION
+                                   AND A.CUSTOMER_NUMBER = K.CUSTOMER_NUMBER
+                                   AND LTRIM(RTRIM(A.SOP_SHIPPING_TERMS_CODE)) = LTRIM(RTRIM(K.SOP_SHIPPING_TERMS_CODE)))) )
+         THEN CONCAT('; SOP_SHIPPING_TERMS_CODE ', K.SOP_SHIPPING_TERMS_CODE,
+                     ' is not defined in CUSTOMER_ADDRESSES for customer ', K.CUSTOMER_NUMBER,
+                     CASE WHEN @SHIP_TERMS_MATCH_ADDRESS = 1
+                          THEN CONCAT(' / delivery address ', K.DELIVERY_ADDRESS_CODE) ELSE '' END)
+         ELSE '' END AS R15c_msg,
+    -- 15d / 15e: values longer than the target column would fail the load with a truncation error
+    CASE WHEN @SST_MAX IS NOT NULL
+          AND LEN(LTRIM(RTRIM(K.SOP_SHIPPING_TERMS_CODE))) > @SST_MAX
+         THEN CONCAT('; SOP_SHIPPING_TERMS_CODE is longer than ', @SST_MAX, ' characters') ELSE '' END AS R15d_msg,
+    CASE WHEN @TPC_MAX IS NOT NULL
+          AND LEN(LTRIM(RTRIM(K.TP_PRICING_CODE))) > @TPC_MAX
+         THEN CONCAT('; TP_PRICING_CODE is longer than ', @TPC_MAX, ' characters') ELSE '' END AS R15e_msg
 ) X;
 
 -- Safety check: fails here if ID is not unique (or is NULL)
@@ -806,7 +858,7 @@ FROM (
         ISNULL(SUM(F4), 0)  AS r4,  ISNULL(SUM(F5), 0)  AS r5,  ISNULL(SUM(F6), 0)  AS r6,
         ISNULL(SUM(F7), 0)  AS r7,  ISNULL(SUM(F8), 0)  AS r8,  ISNULL(SUM(F9), 0)  AS r9,
         ISNULL(SUM(F10), 0) AS r10, ISNULL(SUM(F11), 0) AS r11, ISNULL(SUM(F12), 0) AS r12,
-        ISNULL(SUM(F13), 0) AS r13, ISNULL(SUM(F14), 0) AS r14,
+        ISNULL(SUM(F13), 0) AS r13, ISNULL(SUM(F14), 0) AS r14, ISNULL(SUM(F15), 0) AS r15,
         ISNULL(SUM(CASE WHEN MSG IS NOT NULL THEN 1 ELSE 0 END), 0) AS total_err
     FROM #R
 ) C
@@ -825,9 +877,10 @@ CROSS APPLY (VALUES
     (12, 'Rule 12 - Order group already processed',                  C.r12),
     (13, 'Rule 13 - Clean line in an order group with a failed line', C.r13),
     (14, 'Rule 14 - Potent items: potency (SLBS) quantity derivable', C.r14),
-    (15, 'Total rows with errors',                                   C.total_err),
-    (16, 'Total rows validated (passed)',   (SELECT COUNT(*) FROM FIN.KAS_SO_LOADS WHERE STATUS_FLAG = 'V')),
-    (17, 'Total rows already processed',    (SELECT COUNT(*) FROM FIN.KAS_SO_LOADS WHERE STATUS_FLAG = 'P'))
+    (15, 'Rule 15 - Shipping date / terms code / pricing code',      C.r15),
+    (16, 'Total rows with errors',                                   C.total_err),
+    (17, 'Total rows validated (passed)',   (SELECT COUNT(*) FROM FIN.KAS_SO_LOADS WHERE STATUS_FLAG = 'V')),
+    (18, 'Total rows already processed',    (SELECT COUNT(*) FROM FIN.KAS_SO_LOADS WHERE STATUS_FLAG = 'P'))
 ) V (Sort_Order, Rule_Name, Error_Count)
 ORDER BY V.Sort_Order;
 
@@ -836,7 +889,8 @@ ORDER BY V.Sort_Order;
 -- ============================================================================
 SELECT K.ID, K.COMPANY_CODE, K.DIVISION, K.CUSTOMER_NUMBER,
        K.DELIVERY_ADDRESS_CODE, K.CUSTOMER_REFERENCE, K.ORDER_DATE,
-       K.SYS_DELIVERY_DATE, K.WAREHOUSE, K.PART_CODE,
+       K.SYS_DELIVERY_DATE, K.SYS_SHIPPING_DATE, K.SOP_SHIPPING_TERMS_CODE, K.TP_PRICING_CODE,
+       K.WAREHOUSE, K.PART_CODE,
        K.QUANTITY, K.SALES_PRICE, K.FREIGHT,
        K.STATUS_FLAG, K.RS_MESSAGE_TEXT
 FROM FIN.KAS_SO_LOADS K

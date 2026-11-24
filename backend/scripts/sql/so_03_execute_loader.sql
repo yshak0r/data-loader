@@ -62,17 +62,23 @@
 --       failed  : STATUS_FLAG = 'F', RS_MESSAGE_TEXT = 'Failed due to : <reason>' on the
 --                 line that failed, and 'Failed because other line of this order failed
 --                 loading' on every other line of the same order
---   * HOW FAILURES ARE HANDLED
+--   * HOW FAILURES ARE HANDLED (record by record, as Complete_Loader_Tracked.sql)
 --       1. Checks that can be tied to a line (bad quantity, unusable provided order
 --          number, missing counter row, category-specific unit / conversion problems,
 --          missing UOM conversion, weight/volume that cannot be derived, order number
---          collision) fail that order BEFORE anything is written.
---       2. All remaining orders are loaded in ONE transaction inside TRY/CATCH.
---       3. If that batch fails it is rolled back completely and the orders are retried
---          one per transaction (a failed order is rolled back and not loaded further).
---          For a failed order each line is probed in a transaction that is always
---          rolled back, to find the line (and the SQL Server error) that failed.
---       4. Any unexpected error outside the load marks every line of the run as 'F'
+--          collision) fail that order BEFORE anything is written. All such lines are
+--          found in one pass, so one run reports every one of them.
+--       2. Every remaining order is loaded in its OWN transaction (TRY/CATCH): the header
+--          first, then the lines ONE STAGING RECORD AT A TIME (SALES_ORDER_LINES,
+--          SALES_ORDER_LINE_DETAILS, SALES_ORDER_LINE_QTYS, SALES_ORDER_LINE_DETAIL_QTYS);
+--          each record is marked 'P' in the same transaction.
+--       3. The first record that fails stops its order: the transaction is rolled back (no
+--          table keeps anything of the order), that record gets 'F' with the table and the
+--          SQL Server error, and every other record of the order gets 'F' with 'Failed
+--          because other line of this order failed loading'. Other orders are not affected.
+--       4. #LOAD_TRACK (temp table, available after the run) shows per staging record what
+--          happened in each target table: SUCCESS / FAILED / ROLLED_BACK / NOT_ATTEMPTED.
+--       5. Any unexpected error outside the load marks every line of the run as 'F'
 --          with the error text.
 --     Allocated order numbers are NOT rolled back (counter is advanced in its own short
 --     transaction), so a failed order leaves a gap in the numbering.
@@ -85,6 +91,8 @@ SET XACT_ABORT ON;
 
 DECLARE @SO_MODULE VARCHAR(2) = 'SO';
 DECLARE @LOCK_RC   INT;
+-- real size of KAS_SO_LOADS.RS_MESSAGE_TEXT (500 when it cannot be read), so a long error text never fails the status update
+DECLARE @MsgMax INT = (SELECT ISNULL(NULLIF(CAST(COLUMNPROPERTY(OBJECT_ID('FIN.KAS_SO_LOADS'), 'RS_MESSAGE_TEXT', 'charmaxlen') AS INT), -1), 500));
 
 -- IC_APPROX_QTY_FLAG written on the quantity rows, per product category.
 -- SN: 'N' (working single loader). SP: 'N' (confirm against a manual packaged order).
@@ -119,10 +127,8 @@ IF OBJECT_ID('tempdb..#CONV_USE')       IS NOT NULL DROP TABLE #CONV_USE;
 IF OBJECT_ID('tempdb..#CONV_REQ')       IS NOT NULL DROP TABLE #CONV_REQ;
 IF OBJECT_ID('tempdb..#CONV')           IS NOT NULL DROP TABLE #CONV;
 IF OBJECT_ID('tempdb..#FAILED')         IS NOT NULL DROP TABLE #FAILED;
-IF OBJECT_ID('tempdb..#UNIT')           IS NOT NULL DROP TABLE #UNIT;
-IF OBJECT_ID('tempdb..#PROBE')          IS NOT NULL DROP TABLE #PROBE;
-IF OBJECT_ID('tempdb..#RUN_LINES')      IS NOT NULL DROP TABLE #RUN_LINES;
-IF OBJECT_ID('tempdb..#RUN_ORDERS')     IS NOT NULL DROP TABLE #RUN_ORDERS;
+IF OBJECT_ID('tempdb..#ORD_LIST')       IS NOT NULL DROP TABLE #ORD_LIST;
+IF OBJECT_ID('tempdb..#LOAD_TRACK')     IS NOT NULL DROP TABLE #LOAD_TRACK;
 
 -- Serialize with the validator / other loaders / CLEAR_SO_TABLES.
 -- Session-owned lock: it survives the per-order rollbacks below and is released at the end.
@@ -137,12 +143,6 @@ END
 -- Failure bookkeeping
 CREATE TABLE #FAILED     (ID INT NOT NULL PRIMARY KEY, GROUP_KEY VARCHAR(300) NOT NULL,
                           ROOT BIT NOT NULL, REASON NVARCHAR(2000) NULL);   -- ROOT=1 failed line, 0 = sibling
-CREATE TABLE #UNIT       (SEQ INT IDENTITY(1,1) PRIMARY KEY, KIND CHAR(1) NOT NULL,   -- B batch, O order, L line probe, R resolve
-                          COMPANY_CODE VARCHAR(10) NULL, DIVISION VARCHAR(2) NULL,
-                          ORDER_NUMBER VARCHAR(9) NULL, LINE_ID INT NULL, ERR NVARCHAR(2000) NULL);
-CREATE TABLE #PROBE      (ID INT NOT NULL, ERR NVARCHAR(2000) NULL, HDR BIT NOT NULL);
-CREATE TABLE #RUN_LINES  (ID INT NOT NULL PRIMARY KEY);
-CREATE TABLE #RUN_ORDERS (COMPANY_CODE VARCHAR(10) NOT NULL, DIVISION VARCHAR(2) NOT NULL, ORDER_NUMBER VARCHAR(9) NOT NULL);
 
 BEGIN TRY
 
@@ -159,6 +159,9 @@ SELECT
        K.CUSTOMER_REFERENCE,
        K.EDI_ORDER,
        K.SYS_DELIVERY_DATE,
+       K.SYS_SHIPPING_DATE,
+       NULLIF(LTRIM(RTRIM(K.SOP_SHIPPING_TERMS_CODE)), '') AS SOP_SHIPPING_TERMS_CODE,  -- blank -> NULL: header/line fall back to CUSTOMER_ADDRESSES, then CUSTOMERS
+       ISNULL(LTRIM(RTRIM(K.TP_PRICING_CODE)), '')         AS TP_PRICING_CODE,
        K.WAREHOUSE,
        K.PART_CODE,
        ISNULL(K.QUANTITY, 0)    AS QUANTITY,
@@ -294,7 +297,8 @@ BEGIN
     JOIN #BAD_PROV B ON B.GROUP_KEY = V.GROUP_KEY
     WHERE NOT EXISTS (SELECT 1 FROM #FAILED F WHERE F.ID = V.ID);
     DELETE V FROM #KAS_VALID V WHERE EXISTS (SELECT 1 FROM #FAILED F WHERE F.ID = V.ID);
-    PRINT CONCAT('LOAD_SO_COMPLETE: ', (SELECT COUNT(*) FROM #BAD_PROV),
+    DECLARE @BAD_PROV_CNT INT = (SELECT COUNT(*) FROM #BAD_PROV);   -- PRINT cannot contain a subquery
+    PRINT CONCAT('LOAD_SO_COMPLETE: ', @BAD_PROV_CNT,
                  ' order group(s) failed: unusable provided ORDER_NUMBER (marked F).');
 END
 
@@ -328,6 +332,8 @@ SELECT GROUP_KEY,
        MIN(EDI_ORDER)             AS EDI_ORDER,
        MIN(ORDER_DATE)            AS ORDER_DATE,
        MIN(SYS_DELIVERY_DATE)     AS SYS_DELIVERY_DATE,
+       MIN(SYS_SHIPPING_DATE)     AS SYS_SHIPPING_DATE,
+       MIN(SOP_SHIPPING_TERMS_CODE) AS SOP_SHIPPING_TERMS_CODE,   -- NULL when every line is blank
        COALESCE(SUM(QUANTITY * SALES_PRICE), 0) AS LINE_VALUE,
        COALESCE(SUM(FREIGHT), 0) AS FREIGHT_HDR
 INTO #SO_GROUPS
@@ -389,6 +395,8 @@ SELECT G.GROUP_KEY,
        G.EDI_ORDER,
        G.ORDER_DATE,
        G.SYS_DELIVERY_DATE,
+       G.SYS_SHIPPING_DATE,
+       G.SOP_SHIPPING_TERMS_CODE,
        G.LINE_VALUE,
        G.FREIGHT_HDR,
        CAST(S.START_NUMBER
@@ -414,6 +422,8 @@ SELECT G.GROUP_KEY,
        G.EDI_ORDER,
        G.ORDER_DATE,
        G.SYS_DELIVERY_DATE,
+       G.SYS_SHIPPING_DATE,
+       G.SOP_SHIPPING_TERMS_CODE,
        G.LINE_VALUE,
        G.FREIGHT_HDR,
        CAST(G.PROV_ORDER AS VARCHAR(9)) AS ORDER_NUMBER,
@@ -864,87 +874,125 @@ WHERE EXISTS (SELECT 1 FROM #FAILED F WHERE F.GROUP_KEY = L.GROUP_KEY AND F.ROOT
   AND NOT EXISTS (SELECT 1 FROM #FAILED F2 WHERE F2.ID = L.ID);
 
 -- ----------------------------------------------------------------------------
--- 5. LOAD. One code path serves every unit of work:
---      B = all remaining orders in one transaction (the "whole batch")
---      O = one order per transaction (retry after a failed batch)
---      L = probe of one line of a failed order (header + that line, ALWAYS rolled back)
---      R = resolve a failed order: decide which line failed and why
---    A failed unit is rolled back completely; nothing it wrote survives.
+-- 5. LOAD, RECORD BY RECORD (same approach as Complete_Loader_Tracked.sql)
+--      Each order is ONE transaction. Inside it the header is written first, then the lines ONE
+--      STAGING RECORD AT A TIME (SALES_ORDER_LINES, SALES_ORDER_LINE_DETAILS, SALES_ORDER_LINE_QTYS,
+--      SALES_ORDER_LINE_DETAIL_QTYS); each record is marked 'P' in the same transaction.
+--      The first record that fails stops its order: the transaction is rolled back (nothing of the
+--      order stays in any table), that record is marked 'F' with the table and the SQL Server
+--      error, and every other record of the order is marked 'F' with
+--      'Failed because other line of this order failed loading'. Other orders are not affected.
+--      #LOAD_TRACK (temp table, still available after the run) holds, per staging record, the
+--      outcome in every target table:
+--        PENDING        required, not finished yet
+--        SUCCESS        inserted, verified and committed
+--        FAILED         this is the insert that raised the error
+--        ROLLED_BACK    inserted, then undone because the order failed
+--        NOT_ATTEMPTED  never reached (an earlier step failed, or the line failed a pre-check)
 -- ----------------------------------------------------------------------------
-DECLARE @SEQ INT = 0, @NEXT INT, @KIND CHAR(1), @UC VARCHAR(10), @UD VARCHAR(2), @UO VARCHAR(9),
-        @UL INT, @UERR NVARCHAR(2000), @STAGE CHAR(1), @ERRMSG NVARCHAR(2000),
-        @ORD_CNT INT, @LINE_CNT INT, @QTY_CNT INT, @N INT;
 
-IF EXISTS (SELECT 1 FROM #LINES L WHERE NOT EXISTS (SELECT 1 FROM #FAILED F WHERE F.ID = L.ID))
-    INSERT INTO #UNIT (KIND) VALUES ('B');
+-- 5a. Failures found by the pre-checks above are recorded on the staging rows first
+UPDATE K
+SET STATUS_FLAG     = 'F',
+    RS_MESSAGE_TEXT = CASE WHEN F.ROOT = 1
+                           THEN LEFT(CONCAT('Failed due to : ', ISNULL(F.REASON, 'unknown error')), @MsgMax)
+                           ELSE 'Failed because other line of this order failed loading' END
+FROM FIN.KAS_SO_LOADS K
+JOIN #FAILED F ON F.ID = K.ID
+WHERE K.STATUS_FLAG = 'V';
 
+-- 5b. Tracker: one row per staging record that reached #LINES (types cloned from #LINES)
+SELECT TOP (0) L.ID, L.COMPANY_CODE, L.DIVISION, L.ORDER_NUMBER, L.LINE_NO, L.PART_CODE
+INTO #LOAD_TRACK
+FROM #LINES L;
+
+ALTER TABLE #LOAD_TRACK ADD
+    SALES_ORDER_HEADERS          VARCHAR(15)    NOT NULL DEFAULT 'NOT_REQUIRED',   -- order level: same value on every line of the order
+    SALES_ORDER_LINES            VARCHAR(15)    NOT NULL DEFAULT 'NOT_REQUIRED',
+    SALES_ORDER_LINE_DETAILS     VARCHAR(15)    NOT NULL DEFAULT 'NOT_REQUIRED',
+    SALES_ORDER_LINE_QTYS        VARCHAR(15)    NOT NULL DEFAULT 'NOT_REQUIRED',
+    SALES_ORDER_LINE_DETAIL_QTYS VARCHAR(15)    NOT NULL DEFAULT 'NOT_REQUIRED',
+    FINAL_STATUS                 VARCHAR(1)     NULL,     -- 'P' / 'F'
+    FAIL_TABLE                   SYSNAME        NULL,     -- the failing step on the failed record ('PRE-CHECK' = failed before loading)
+    ERROR_NUMBER                 INT            NULL,
+    ERROR_LINE                   INT            NULL,
+    ERROR_MESSAGE                NVARCHAR(4000) NULL,
+    PROCESSED_AT                 DATETIME2      NULL;
+
+INSERT INTO #LOAD_TRACK
+    (ID, COMPANY_CODE, DIVISION, ORDER_NUMBER, LINE_NO, PART_CODE,
+     SALES_ORDER_HEADERS, SALES_ORDER_LINES, SALES_ORDER_LINE_DETAILS, SALES_ORDER_LINE_QTYS, SALES_ORDER_LINE_DETAIL_QTYS,
+     FINAL_STATUS, FAIL_TABLE, ERROR_MESSAGE, PROCESSED_AT)
+SELECT L.ID, L.COMPANY_CODE, L.DIVISION, L.ORDER_NUMBER, L.LINE_NO, L.PART_CODE,
+       CASE WHEN F.ID IS NULL THEN 'PENDING' ELSE 'NOT_ATTEMPTED' END,
+       CASE WHEN F.ID IS NULL THEN 'PENDING' ELSE 'NOT_ATTEMPTED' END,
+       CASE WHEN F.ID IS NULL THEN 'PENDING' ELSE 'NOT_ATTEMPTED' END,
+       CASE WHEN F.ID IS NULL THEN 'PENDING' ELSE 'NOT_ATTEMPTED' END,
+       CASE WHEN F.ID IS NULL THEN 'PENDING' ELSE 'NOT_ATTEMPTED' END,
+       CASE WHEN F.ID IS NULL THEN NULL ELSE 'F' END,
+       CASE WHEN F.ID IS NULL THEN NULL ELSE 'PRE-CHECK' END,
+       CASE WHEN F.ID IS NULL THEN NULL
+            WHEN F.ROOT = 1 THEN F.REASON
+            ELSE N'Failed because other line of this order failed loading' END,
+       CASE WHEN F.ID IS NULL THEN NULL ELSE SYSDATETIME() END
+FROM #LINES L
+LEFT JOIN #FAILED F ON F.ID = L.ID;
+
+CREATE UNIQUE CLUSTERED INDEX IX_LOAD_TRACK_ID ON #LOAD_TRACK (ID);
+
+-- 5c. Orders still to load (whole orders only: a failed pre-check fails every line of its order)
+SELECT ROW_NUMBER() OVER (ORDER BY MIN(L.ID)) AS SEQ, L.COMPANY_CODE, L.DIVISION, L.ORDER_NUMBER
+INTO #ORD_LIST
+FROM #LINES L
+WHERE NOT EXISTS (SELECT 1 FROM #FAILED F WHERE F.ID = L.ID)
+GROUP BY L.COMPANY_CODE, L.DIVISION, L.ORDER_NUMBER;
+
+DECLARE @OSeq BIGINT = 0, @ONext BIGINT,
+        @UC VARCHAR(10), @UD VARCHAR(2), @UO VARCHAR(9),
+        @LNo BIGINT, @CurId INT, @FirstId INT, @RootId INT,
+        @Step SYSNAME, @FailStep SYSNAME, @Bad SYSNAME, @Committed BIT,
+        @ErrNum INT, @ErrLine INT, @ErrMsg NVARCHAR(4000), @FullMsg NVARCHAR(4000), @VMsg NVARCHAR(2048),
+        @OrdLines INT, @OrdQtyRows INT, @ExpQty INT, @N INT;
+
+-- Survives ROLLBACK (unlike temp tables): the steps of the current order that completed.
+-- ID = staging record (0 = the order header).
+DECLARE @STEPS TABLE (ID INT NOT NULL, TBL SYSNAME NOT NULL, PRIMARY KEY (ID, TBL));
+
+-- 5d. ONE ORDER AT A TIME, ONE STAGING RECORD AT A TIME
 WHILE 1 = 1
 BEGIN
-    SELECT @NEXT = MIN(SEQ) FROM #UNIT WHERE SEQ > @SEQ;
-    IF @NEXT IS NULL BREAK;
-    SET @SEQ = @NEXT;
-    SELECT @KIND = KIND, @UC = COMPANY_CODE, @UD = DIVISION, @UO = ORDER_NUMBER,
-           @UL = LINE_ID, @UERR = ERR
-    FROM #UNIT WHERE SEQ = @SEQ;
+    SET @ONext = NULL;
+    SELECT @ONext = MIN(SEQ) FROM #ORD_LIST WHERE SEQ > @OSeq;
+    IF @ONext IS NULL BREAK;
+    SET @OSeq = @ONext;
+    SELECT @UC = COMPANY_CODE, @UD = DIVISION, @UO = ORDER_NUMBER FROM #ORD_LIST WHERE SEQ = @OSeq;
 
-    IF @KIND = 'R'
-    BEGIN
-        -- lines whose own probe failed are the failed lines
-        INSERT INTO #FAILED (ID, GROUP_KEY, ROOT, REASON)
-        SELECT L.ID, L.GROUP_KEY, 1, P.ERR
-        FROM #LINES L
-        JOIN #PROBE P ON P.ID = L.ID
-        WHERE L.COMPANY_CODE = @UC AND L.DIVISION = @UD AND L.ORDER_NUMBER = @UO
-          AND P.ERR IS NOT NULL AND P.HDR = 0
-          AND NOT EXISTS (SELECT 1 FROM #FAILED F WHERE F.ID = L.ID);
+    DELETE FROM @STEPS;
+    SET @Step = N'PRE-PROCESSING';
+    SET @FailStep = NULL;
+    SET @Committed = 0;
+    SET @LNo = 0;
+    SET @CurId = NULL;
+    SET @FirstId = NULL;
+    SET @RootId = NULL;
 
-        -- header-level error, or no single line to blame: the first line carries the reason
-        IF NOT EXISTS (SELECT 1 FROM #FAILED F JOIN #LINES L ON L.ID = F.ID
-                       WHERE L.COMPANY_CODE = @UC AND L.DIVISION = @UD AND L.ORDER_NUMBER = @UO AND F.ROOT = 1)
-            INSERT INTO #FAILED (ID, GROUP_KEY, ROOT, REASON)
-            SELECT TOP 1 L.ID, L.GROUP_KEY, 1,
-                   COALESCE((SELECT TOP 1 P.ERR FROM #PROBE P JOIN #LINES L2 ON L2.ID = P.ID
-                             WHERE L2.COMPANY_CODE = @UC AND L2.DIVISION = @UD AND L2.ORDER_NUMBER = @UO
-                               AND P.HDR = 1 AND P.ERR IS NOT NULL), @UERR)
-            FROM #LINES L
-            WHERE L.COMPANY_CODE = @UC AND L.DIVISION = @UD AND L.ORDER_NUMBER = @UO
-            ORDER BY L.LINE_NO;
+    SELECT @OrdLines   = COUNT(*),
+           @OrdQtyRows = SUM(CASE WHEN L.CAT = 'SN' THEN 1 ELSE 2 END)      -- quantity rows: 1 per SN line, 2 per SP / PN line
+    FROM #LINES L
+    WHERE L.COMPANY_CODE = @UC AND L.DIVISION = @UD AND L.ORDER_NUMBER = @UO;
 
-        -- every other line of the order
-        INSERT INTO #FAILED (ID, GROUP_KEY, ROOT, REASON)
-        SELECT L.ID, L.GROUP_KEY, 0, NULL
-        FROM #LINES L
-        WHERE L.COMPANY_CODE = @UC AND L.DIVISION = @UD AND L.ORDER_NUMBER = @UO
-          AND NOT EXISTS (SELECT 1 FROM #FAILED F WHERE F.ID = L.ID);
-        CONTINUE;
-    END
+    SELECT TOP (1) @FirstId = L.ID
+    FROM #LINES L
+    WHERE L.COMPANY_CODE = @UC AND L.DIVISION = @UD AND L.ORDER_NUMBER = @UO
+    ORDER BY L.LINE_NO;
 
-    TRUNCATE TABLE #RUN_LINES;
-    TRUNCATE TABLE #RUN_ORDERS;
-    IF @KIND = 'B'
-        INSERT INTO #RUN_LINES (ID)
-        SELECT L.ID FROM #LINES L WHERE NOT EXISTS (SELECT 1 FROM #FAILED F WHERE F.ID = L.ID);
-    ELSE IF @KIND = 'O'
-        INSERT INTO #RUN_LINES (ID)
-        SELECT L.ID FROM #LINES L
-        WHERE L.COMPANY_CODE = @UC AND L.DIVISION = @UD AND L.ORDER_NUMBER = @UO;
-    ELSE
-        INSERT INTO #RUN_LINES (ID) SELECT L.ID FROM #LINES L WHERE L.ID = @UL;
-
-    INSERT INTO #RUN_ORDERS (COMPANY_CODE, DIVISION, ORDER_NUMBER)
-    SELECT DISTINCT L.COMPANY_CODE, L.DIVISION, L.ORDER_NUMBER
-    FROM #LINES L JOIN #RUN_LINES R ON R.ID = L.ID;
-    SELECT @ORD_CNT = COUNT(*) FROM #RUN_ORDERS;
-    SELECT @LINE_CNT = COUNT(*) FROM #RUN_LINES;
-    IF @LINE_CNT = 0 CONTINUE;
-    -- quantity rows expected: 1 per SN line, 2 per SP / PN line
-    SELECT @QTY_CNT = COUNT(*) + SUM(CASE WHEN L.CAT <> 'SN' THEN 1 ELSE 0 END)
-    FROM #LINES L JOIN #RUN_LINES RL ON RL.ID = L.ID;
-
-    SET @STAGE = 'H';
-    SET @ERRMSG = NULL;
     BEGIN TRY
+        -- ================= TRANSACTION FOR THIS ORDER =================
         BEGIN TRANSACTION;
+
+        -- ---- header (one row for the order); a header error is reported on the first line ----
+        SET @Step  = N'SALES_ORDER_HEADERS';
+        SET @CurId = @FirstId;
 
 INSERT INTO FIN.SALES_ORDER_HEADERS
 (COMPANY_CODE, DIVISION, ORDER_NUMBER, CUSTOMER_NUMBER, INVOICE_ADDRESS_CODE,
@@ -1008,8 +1056,8 @@ SELECT
        CA.DELIVERY_INSTRUCTIONS,
        CA.SHIP_METHOD,
        O.SYS_DELIVERY_DATE,
-       O.SYS_DELIVERY_DATE,
-       COALESCE(CA.SOP_SHIPPING_TERMS_CODE, C.SOP_SHIPPING_TERMS_CODE),
+       O.SYS_SHIPPING_DATE,
+       COALESCE( NULLIF(O.SOP_SHIPPING_TERMS_CODE, ''), NULLIF(CA.SOP_SHIPPING_TERMS_CODE, ''), C.SOP_SHIPPING_TERMS_CODE),
        C.MP_SHIPPING_CUSTOMER,
        C.MP_INVOICE_CUSTOMER,
        COALESCE(CA.BROKER_CODE, C.BROKER_CODE),
@@ -1019,14 +1067,13 @@ SELECT
             THEN COALESCE(SOT.COST_CENTER, '') ELSE '' END,
        O.EDI_ORDER
 FROM #SO_ORDERS O
-JOIN #RUN_ORDERS RO
-  ON RO.COMPANY_CODE = O.COMPANY_CODE AND RO.DIVISION = O.DIVISION AND RO.ORDER_NUMBER = O.ORDER_NUMBER
 JOIN (SELECT COMPANY_CODE, DIVISION, ORDER_NUMBER,
              SUM(WEIGHT_HDR)     AS WEIGHT_TOTAL,
              SUM(VOLUME_HDR)     AS VOLUME_TOTAL,
              MAX(HDR_WEIGHT_UOM) AS HDR_WEIGHT_UOM,
              MAX(HDR_VOLUME_UOM) AS HDR_VOLUME_UOM
       FROM #LINES
+      WHERE COMPANY_CODE = @UC AND DIVISION = @UD AND ORDER_NUMBER = @UO
       GROUP BY COMPANY_CODE, DIVISION, ORDER_NUMBER) LW
   ON LW.COMPANY_CODE = O.COMPANY_CODE
  AND LW.DIVISION     = O.DIVISION
@@ -1044,18 +1091,34 @@ LEFT JOIN FIN.SALES_ORDER_TYPES SOT
   ON SOT.COMPANY_CODE      = O.COMPANY_CODE
  AND SOT.SALES_ORDER_TYPE  = C.SALES_ORDER_TYPE
 LEFT JOIN FIN.COMPANY_CONTROLS CC
-  ON CC.COMPANY_CODE = O.COMPANY_CODE;
-SET @N = @@ROWCOUNT;
-        IF @N <> @ORD_CNT THROW 50010, 'The sales order header was not created.', 1;
+  ON CC.COMPANY_CODE = O.COMPANY_CODE
+WHERE O.COMPANY_CODE = @UC AND O.DIVISION = @UD AND O.ORDER_NUMBER = @UO;
+        SET @N = @@ROWCOUNT;
+        IF @N <> 1 THROW 50010, 'The sales order header was not created.', 1;
+        INSERT INTO @STEPS (ID, TBL) VALUES (0, N'SALES_ORDER_HEADERS');
 
-        SET @STAGE = 'D';
+        -- ---- lines, one staging record at a time ----
+        WHILE 1 = 1
+        BEGIN
+            SET @CurId = NULL;
+            SELECT TOP (1) @CurId = L.ID, @LNo = L.LINE_NO
+            FROM #LINES L
+            WHERE L.COMPANY_CODE = @UC AND L.DIVISION = @UD AND L.ORDER_NUMBER = @UO
+              AND L.LINE_NO > @LNo
+            ORDER BY L.LINE_NO;
+            IF @CurId IS NULL BREAK;
+
+            SELECT @ExpQty = CASE WHEN L.CAT = 'SN' THEN 1 ELSE 2 END FROM #LINES L WHERE L.ID = @CurId;
+
+            -- SALES_ORDER_LINES
+            SET @Step = N'SALES_ORDER_LINES';
 INSERT INTO FIN.SALES_ORDER_LINES
 (COMPANY_CODE, DIVISION, ORDER_NUMBER, ORDER_LINE_NUMBER, ORDER_LINE_TYPE,
  PRODUCT_GROUP, PART_CODE, WAREHOUSE, ORDER_LINE_REFERENCE, SOP_NOMINATED_UNIT,
  SOP_NOMINATED_PRICE_UNIT, IC_PACK_UNIT, UNIT_SALES, UNIT_PRICE, SALES_PRICE,
  UNIT_COST, LINE_TAX, LINE_DISCOUNT, DELIVERY_ADDRESS_CODE, CUSTOMER_TAX_CODE,
  PRODUCT_TAX_CODE, SALESPERSON_CODE, LOCATION, SALES_ANALYSIS_GROUP,WEIGHT, WEIGHT_UOM, 
- VOLUME,VOLUME_UOM, COST_CENTER,
+ VOLUME,VOLUME_UOM, COST_CENTER,TP_PRICING_CODE,
  CUSTOMER_NUMBER,MP_SHIPPING_CUSTOMER, STATUS_FLAG, ORDER_CYCLE, USERNAME, SYSTEM_DATE,
  SYS_CURRENCY_CODE, SYS_CURRENCY_RATE, SYS_CURRENCY_RATIO_INDIC,
  SYS_CURRENCY_FIXED_FLAG, SYS_BASE_CURRENCY, SYS_CURRENCY_DATE,
@@ -1088,6 +1151,7 @@ SELECT
        L.ITEM_VOLUME_UOM AS VOLUME_UOM,
        CASE WHEN ISNULL(CC.COST_CENTER_ON_ORDER_TYPE, 'N') = 'Y'
             THEN COALESCE(SOT.COST_CENTER, '') ELSE '' END,
+       L.TP_PRICING_CODE,
        L.CUSTOMER_NUMBER,
        L.CUSTOMER_NUMBER,
        'A',
@@ -1104,13 +1168,12 @@ SELECT
        CA.SHIP_METHOD,
        C.CREDIT_TERMS_CODE,
        L.SYS_DELIVERY_DATE,
-       L.SYS_DELIVERY_DATE,
-        COALESCE(CA.SOP_SHIPPING_TERMS_CODE, C.SOP_SHIPPING_TERMS_CODE),
+       L.SYS_SHIPPING_DATE,
+       COALESCE( NULLIF(L.SOP_SHIPPING_TERMS_CODE, ''), NULLIF(CA.SOP_SHIPPING_TERMS_CODE, ''), C.SOP_SHIPPING_TERMS_CODE),
        L.DELIVERY_ADDRESS_CODE,
        L.QUANTITY * L.SALES_PRICE,
        L.QUANTITY * L.SALES_PRICE
 FROM #LINES L
-JOIN #RUN_LINES RL ON RL.ID = L.ID
 LEFT JOIN FIN.CUSTOMERS C
   ON C.COMPANY_CODE    = L.COMPANY_CODE
  AND C.DIVISION        = L.DIVISION
@@ -1124,10 +1187,14 @@ LEFT JOIN FIN.SALES_ORDER_TYPES SOT
   ON SOT.COMPANY_CODE      = L.COMPANY_CODE
  AND SOT.SALES_ORDER_TYPE  = C.SALES_ORDER_TYPE
 LEFT JOIN FIN.COMPANY_CONTROLS CC
-  ON CC.COMPANY_CODE = L.COMPANY_CODE;
-SET @N = @@ROWCOUNT;
-        IF @N <> @LINE_CNT THROW 50011, 'The sales order line was not created.', 1;
+  ON CC.COMPANY_CODE = L.COMPANY_CODE
+WHERE L.ID = @CurId;
+            SET @N = @@ROWCOUNT;
+            IF @N <> 1 THROW 50011, 'The sales order line was not created.', 1;
+            INSERT INTO @STEPS (ID, TBL) VALUES (@CurId, N'SALES_ORDER_LINES');
 
+            -- SALES_ORDER_LINE_DETAILS
+            SET @Step = N'SALES_ORDER_LINE_DETAILS';
 INSERT INTO FIN.SALES_ORDER_LINE_DETAILS
 (COMPANY_CODE, DIVISION, ORDER_NUMBER, ORDER_LINE_NUMBER, [SEQUENCE],
  ORDER_LINE_REF, REQUIRED_DATE, ORDER_HORIZON, ORDER_DATE, STATUS_FLAG,
@@ -1137,20 +1204,20 @@ INSERT INTO FIN.SALES_ORDER_LINE_DETAILS
  TM_LOAD_PLANNING)
 SELECT
        L.COMPANY_CODE, L.DIVISION, L.ORDER_NUMBER, L.LINE_NO,
-       '001', '', L.SYS_DELIVERY_DATE, 'C', ISNULL(L.ORDER_DATE, GETDATE()),
-       'A', '', 0, '', L.SYS_DELIVERY_DATE, L.SYS_DELIVERY_DATE, 0,
+       '001', '', '', 'C', ISNULL(L.ORDER_DATE, GETDATE()),
+       'A', '', 0, '', L.SYS_SHIPPING_DATE, L.SYS_DELIVERY_DATE, 0,
        L.WAREHOUSE, '1', 0, 0, 0, ISNULL(WC.TM_LOAD_PLANNING, 'N')
 FROM #LINES L
-JOIN #RUN_LINES RL ON RL.ID = L.ID
 LEFT JOIN FIN.WAREHOUSE_CONTROLS WC
   ON WC.COMPANY_CODE = L.COMPANY_CODE
- AND WC.WAREHOUSE    = L.WAREHOUSE;
-SET @N = @@ROWCOUNT;
-        IF @N <> @LINE_CNT THROW 50012, 'The sales order line detail was not created.', 1;
+ AND WC.WAREHOUSE    = L.WAREHOUSE
+WHERE L.ID = @CurId;
+            SET @N = @@ROWCOUNT;
+            IF @N <> 1 THROW 50012, 'The sales order line detail was not created.', 1;
+            INSERT INTO @STEPS (ID, TBL) VALUES (@CurId, N'SALES_ORDER_LINE_DETAILS');
 
--- ----------------------------------------------------------------------------
--- 9. Line quantities - 1 row per SN line, 2 rows per SP / PN line (sales unit + second unit)
--- ----------------------------------------------------------------------------
+            -- SALES_ORDER_LINE_QTYS: 1 row per SN line, 2 rows per SP / PN line (sales unit + second unit)
+            SET @Step = N'SALES_ORDER_LINE_QTYS';
 INSERT INTO FIN.SALES_ORDER_LINE_QTYS
 (COMPANY_CODE, DIVISION, ORDER_NUMBER, ORDER_LINE_NUMBER, UNIT_OF_MEASURE,
  IC_APPROX_QTY_FLAG, ORDER_QUANTITY, TEMP_ORDER_QUANTITY, IC_QTY_PICKED,
@@ -1162,16 +1229,15 @@ SELECT
        Q.QTY, Q.QTY,
        0, 0, 0, 0, 0, 0, 0, 0, 0
 FROM #LINES L
-JOIN #RUN_LINES RL ON RL.ID = L.ID
 CROSS APPLY (VALUES (1, L.UNIT_SALES, CAST(L.QUANTITY AS DECIMAL(28,10))),
                     (2, L.U2_UOM,     L.U2_QTY)) Q (SEQ, UOM, QTY)
-WHERE Q.SEQ = 1 OR L.CAT <> 'SN';
-SET @N = @@ROWCOUNT;
-        IF @N <> @QTY_CNT THROW 50013, 'The sales order line quantities were not created as expected (1 row per SN line, 2 per SP / PN line).', 1;
+WHERE L.ID = @CurId AND (Q.SEQ = 1 OR L.CAT <> 'SN');
+            SET @N = @@ROWCOUNT;
+            IF @N <> @ExpQty THROW 50013, 'The sales order line quantities were not created as expected (1 row per SN line, 2 per SP / PN line).', 1;
+            INSERT INTO @STEPS (ID, TBL) VALUES (@CurId, N'SALES_ORDER_LINE_QTYS');
 
--- ----------------------------------------------------------------------------
--- 10. Line detail quantities - 1 row per SN line, 2 rows per SP / PN line
--- ----------------------------------------------------------------------------
+            -- SALES_ORDER_LINE_DETAIL_QTYS: 1 row per SN line, 2 rows per SP / PN line
+            SET @Step = N'SALES_ORDER_LINE_DETAIL_QTYS';
 INSERT INTO FIN.SALES_ORDER_LINE_DETAIL_QTYS
 (COMPANY_CODE, DIVISION, ORDER_NUMBER, ORDER_LINE_NUMBER, [SEQUENCE],
  UNIT_OF_MEASURE, IC_APPROX_QTY_FLAG, ORDER_QUANTITY, TEMP_ORDER_QUANTITY,
@@ -1182,19 +1248,18 @@ SELECT
        L.COMPANY_CODE, L.DIVISION, L.ORDER_NUMBER, L.LINE_NO,
        '001', Q.UOM, CASE L.CAT WHEN 'SP' THEN @APPROX_SP WHEN 'PN' THEN @APPROX_PN ELSE @APPROX_SN END,
        Q.QTY, Q.QTY,
-       0, 0, 0, 0, 0, 0, L.WAREHOUSE, L.PART_CODE, L.SYS_DELIVERY_DATE,
+       0, 0, 0, 0, 0, 0, L.WAREHOUSE, L.PART_CODE, '',
        'S', 0, 0
 FROM #LINES L
-JOIN #RUN_LINES RL ON RL.ID = L.ID
 CROSS APPLY (VALUES (1, L.UNIT_SALES, CAST(L.QUANTITY AS DECIMAL(28,10))),
                     (2, L.U2_UOM,     L.U2_QTY)) Q (SEQ, UOM, QTY)
-WHERE Q.SEQ = 1 OR L.CAT <> 'SN';
-SET @N = @@ROWCOUNT;
-        IF @N <> @QTY_CNT THROW 50014, 'The sales order line detail quantities were not created as expected (1 row per SN line, 2 per SP / PN line).', 1;
+WHERE L.ID = @CurId AND (Q.SEQ = 1 OR L.CAT <> 'SN');
+            SET @N = @@ROWCOUNT;
+            IF @N <> @ExpQty THROW 50014, 'The sales order line detail quantities were not created as expected (1 row per SN line, 2 per SP / PN line).', 1;
+            INSERT INTO @STEPS (ID, TBL) VALUES (@CurId, N'SALES_ORDER_LINE_DETAIL_QTYS');
 
-        IF @KIND IN ('B', 'O')
-        BEGIN
-            -- Loaded: record order number / line number on the staging rows
+            -- the staging record is marked loaded inside the order's transaction (undone if the order fails)
+            SET @Step = N'KAS_SO_LOADS';
             UPDATE K
             SET STATUS_FLAG       = 'P',
                 PROCESSED_DATE    = GETDATE(),
@@ -1203,63 +1268,153 @@ SET @N = @@ROWCOUNT;
                 RS_MESSAGE_TEXT   = CONCAT('Loaded as order number : ', L.ORDER_NUMBER)
             FROM FIN.KAS_SO_LOADS K
             JOIN #LINES L ON L.ID = K.ID
-            JOIN #RUN_LINES RL ON RL.ID = L.ID;
+            WHERE L.ID = @CurId
+              AND K.STATUS_FLAG = 'V';
             SET @N = @@ROWCOUNT;
-            IF @N <> @LINE_CNT THROW 50015, 'Staging rows marked processed do not match the loaded lines.', 1;
-            COMMIT TRANSACTION;
-        END
-        ELSE
+            IF @N <> 1 THROW 50015, 'Staging row was not found in status V (changed by another process?).', 1;
+        END;
+
+        -- ---- FINAL VALIDATION: the order must really be in place, with every row it should have ----
+        SET @Step  = N'VALIDATION';
+        SET @CurId = @FirstId;
+        SET @Bad   = NULL;
+        SELECT TOP (1) @Bad = Z.TBL
+        FROM (
+            SELECT N'SALES_ORDER_HEADERS' AS TBL,
+                   (SELECT COUNT(*) FROM FIN.SALES_ORDER_HEADERS T
+                    WHERE T.COMPANY_CODE = @UC AND T.DIVISION = @UD AND T.ORDER_NUMBER = @UO) AS ACTUAL,
+                   1 AS EXPECTED
+            UNION ALL
+            SELECT N'SALES_ORDER_LINES',
+                   (SELECT COUNT(*) FROM FIN.SALES_ORDER_LINES T
+                    WHERE T.COMPANY_CODE = @UC AND T.DIVISION = @UD AND T.ORDER_NUMBER = @UO),
+                   @OrdLines
+            UNION ALL
+            SELECT N'SALES_ORDER_LINE_DETAILS',
+                   (SELECT COUNT(*) FROM FIN.SALES_ORDER_LINE_DETAILS T
+                    WHERE T.COMPANY_CODE = @UC AND T.DIVISION = @UD AND T.ORDER_NUMBER = @UO),
+                   @OrdLines
+            UNION ALL
+            SELECT N'SALES_ORDER_LINE_QTYS',
+                   (SELECT COUNT(*) FROM FIN.SALES_ORDER_LINE_QTYS T
+                    WHERE T.COMPANY_CODE = @UC AND T.DIVISION = @UD AND T.ORDER_NUMBER = @UO),
+                   @OrdQtyRows
+            UNION ALL
+            SELECT N'SALES_ORDER_LINE_DETAIL_QTYS',
+                   (SELECT COUNT(*) FROM FIN.SALES_ORDER_LINE_DETAIL_QTYS T
+                    WHERE T.COMPANY_CODE = @UC AND T.DIVISION = @UD AND T.ORDER_NUMBER = @UO),
+                   @OrdQtyRows
+        ) Z
+        WHERE Z.ACTUAL <> Z.EXPECTED;
+
+        IF @Bad IS NOT NULL
         BEGIN
-            ROLLBACK TRANSACTION;                       -- probe: never keep anything
-            INSERT INTO #PROBE (ID, ERR, HDR) VALUES (@UL, NULL, 0);
-        END
+            SET @Step  = @Bad;
+            SET @VMsg  = CONCAT(N'Final validation failed: order ', @UO, N' does not hold the expected number of rows in ', @Bad);
+            THROW 50016, @VMsg, 1;
+        END;
+
+        COMMIT TRANSACTION;
+        SET @Committed = 1;
+
+        -- tracker: everything of this order is committed
+        UPDATE T
+        SET SALES_ORDER_HEADERS          = CASE WHEN SALES_ORDER_HEADERS          = 'PENDING' THEN 'SUCCESS' ELSE SALES_ORDER_HEADERS          END,
+            SALES_ORDER_LINES            = CASE WHEN SALES_ORDER_LINES            = 'PENDING' THEN 'SUCCESS' ELSE SALES_ORDER_LINES            END,
+            SALES_ORDER_LINE_DETAILS     = CASE WHEN SALES_ORDER_LINE_DETAILS     = 'PENDING' THEN 'SUCCESS' ELSE SALES_ORDER_LINE_DETAILS     END,
+            SALES_ORDER_LINE_QTYS        = CASE WHEN SALES_ORDER_LINE_QTYS        = 'PENDING' THEN 'SUCCESS' ELSE SALES_ORDER_LINE_QTYS        END,
+            SALES_ORDER_LINE_DETAIL_QTYS = CASE WHEN SALES_ORDER_LINE_DETAIL_QTYS = 'PENDING' THEN 'SUCCESS' ELSE SALES_ORDER_LINE_DETAIL_QTYS END,
+            T.FINAL_STATUS = 'P', T.PROCESSED_AT = SYSDATETIME()
+        FROM #LOAD_TRACK T
+        WHERE T.COMPANY_CODE = @UC AND T.DIVISION = @UD AND T.ORDER_NUMBER = @UO;
     END TRY
     BEGIN CATCH
-        SET @ERRMSG = ERROR_MESSAGE();
-        IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;
+        SET @ErrNum  = ERROR_NUMBER();
+        SET @ErrLine = ERROR_LINE();
+        SET @ErrMsg  = ERROR_MESSAGE();
 
-        IF @KIND = 'B'
+        -- undo EVERYTHING done for this order (all target tables and the staging 'P' marks)
+        IF XACT_STATE() <> 0 ROLLBACK TRANSACTION;
+
+        IF @Committed = 1
         BEGIN
-            -- whole batch rolled back: retry order by order
-            INSERT INTO #UNIT (KIND, COMPANY_CODE, DIVISION, ORDER_NUMBER)
-            SELECT 'O', COMPANY_CODE, DIVISION, ORDER_NUMBER
-            FROM #RUN_ORDERS ORDER BY COMPANY_CODE, DIVISION, ORDER_NUMBER;
-        END
-        ELSE IF @KIND = 'O'
-        BEGIN
-            -- order rolled back and not loaded further: find the failing line, then resolve
-            INSERT INTO #UNIT (KIND, COMPANY_CODE, DIVISION, ORDER_NUMBER, LINE_ID)
-            SELECT 'L', L.COMPANY_CODE, L.DIVISION, L.ORDER_NUMBER, L.ID
-            FROM #LINES L JOIN #RUN_LINES R ON R.ID = L.ID ORDER BY L.LINE_NO;
-            INSERT INTO #UNIT (KIND, COMPANY_CODE, DIVISION, ORDER_NUMBER, ERR)
-            VALUES ('R', @UC, @UD, @UO, @ERRMSG);
+            -- the order is committed and its staging rows are 'P'; only the tracker bookkeeping failed
+            PRINT CONCAT('WARNING: order ', @UO, ' committed but the tracker update failed: ', @ErrMsg);
+            UPDATE #LOAD_TRACK SET FINAL_STATUS = 'P', PROCESSED_AT = SYSDATETIME()
+            WHERE COMPANY_CODE = @UC AND DIVISION = @UD AND ORDER_NUMBER = @UO;
         END
         ELSE
         BEGIN
-            INSERT INTO #PROBE (ID, ERR, HDR) VALUES (@UL, @ERRMSG, CASE WHEN @STAGE = 'H' THEN 1 ELSE 0 END);
-        END
-    END CATCH
-END
+            SET @FailStep = @Step;
+            SET @RootId   = ISNULL(@CurId, @FirstId);        -- the record that failed (header errors: first line)
+            SET @FullMsg  = CONCAT(N'[', ISNULL(@FailStep, N'?'), N'] ', @ErrMsg,
+                                   N' (SQL error ', @ErrNum, N', line ', @ErrLine, N')');
+
+            -- tracker (temp-table edits made inside the transaction were rolled back, so it is written now)
+            UPDATE T
+            SET SALES_ORDER_HEADERS = CASE WHEN T.SALES_ORDER_HEADERS <> 'PENDING' THEN T.SALES_ORDER_HEADERS
+                    WHEN @FailStep = N'SALES_ORDER_HEADERS' THEN 'FAILED'
+                    WHEN EXISTS (SELECT 1 FROM @STEPS S WHERE S.ID = 0 AND S.TBL = N'SALES_ORDER_HEADERS') THEN 'ROLLED_BACK'
+                    ELSE 'NOT_ATTEMPTED' END,
+                SALES_ORDER_LINES = CASE WHEN T.SALES_ORDER_LINES <> 'PENDING' THEN T.SALES_ORDER_LINES
+                    WHEN T.ID = @RootId AND @FailStep = N'SALES_ORDER_LINES' THEN 'FAILED'
+                    WHEN EXISTS (SELECT 1 FROM @STEPS S WHERE S.ID = T.ID AND S.TBL = N'SALES_ORDER_LINES') THEN 'ROLLED_BACK'
+                    ELSE 'NOT_ATTEMPTED' END,
+                SALES_ORDER_LINE_DETAILS = CASE WHEN T.SALES_ORDER_LINE_DETAILS <> 'PENDING' THEN T.SALES_ORDER_LINE_DETAILS
+                    WHEN T.ID = @RootId AND @FailStep = N'SALES_ORDER_LINE_DETAILS' THEN 'FAILED'
+                    WHEN EXISTS (SELECT 1 FROM @STEPS S WHERE S.ID = T.ID AND S.TBL = N'SALES_ORDER_LINE_DETAILS') THEN 'ROLLED_BACK'
+                    ELSE 'NOT_ATTEMPTED' END,
+                SALES_ORDER_LINE_QTYS = CASE WHEN T.SALES_ORDER_LINE_QTYS <> 'PENDING' THEN T.SALES_ORDER_LINE_QTYS
+                    WHEN T.ID = @RootId AND @FailStep = N'SALES_ORDER_LINE_QTYS' THEN 'FAILED'
+                    WHEN EXISTS (SELECT 1 FROM @STEPS S WHERE S.ID = T.ID AND S.TBL = N'SALES_ORDER_LINE_QTYS') THEN 'ROLLED_BACK'
+                    ELSE 'NOT_ATTEMPTED' END,
+                SALES_ORDER_LINE_DETAIL_QTYS = CASE WHEN T.SALES_ORDER_LINE_DETAIL_QTYS <> 'PENDING' THEN T.SALES_ORDER_LINE_DETAIL_QTYS
+                    WHEN T.ID = @RootId AND @FailStep = N'SALES_ORDER_LINE_DETAIL_QTYS' THEN 'FAILED'
+                    WHEN EXISTS (SELECT 1 FROM @STEPS S WHERE S.ID = T.ID AND S.TBL = N'SALES_ORDER_LINE_DETAIL_QTYS') THEN 'ROLLED_BACK'
+                    ELSE 'NOT_ATTEMPTED' END,
+                T.FINAL_STATUS  = 'F',
+                T.FAIL_TABLE    = CASE WHEN T.ID = @RootId THEN @FailStep END,
+                T.ERROR_NUMBER  = CASE WHEN T.ID = @RootId THEN @ErrNum   END,
+                T.ERROR_LINE    = CASE WHEN T.ID = @RootId THEN @ErrLine  END,
+                T.ERROR_MESSAGE = CASE WHEN T.ID = @RootId THEN @FullMsg
+                                       ELSE N'Failed because other line of this order failed loading' END,
+                T.PROCESSED_AT  = SYSDATETIME()
+            FROM #LOAD_TRACK T
+            WHERE T.COMPANY_CODE = @UC AND T.DIVISION = @UD AND T.ORDER_NUMBER = @UO
+              AND T.FINAL_STATUS IS NULL;
+
+            -- staging rows: the failed record carries the reason, every other record of the order says why it failed
+            UPDATE K
+            SET STATUS_FLAG     = 'F',
+                RS_MESSAGE_TEXT = CASE WHEN K.ID = @RootId
+                                       THEN LEFT(CONCAT(N'Failed due to : ', @FullMsg), @MsgMax)
+                                       ELSE 'Failed because other line of this order failed loading' END
+            FROM FIN.KAS_SO_LOADS K
+            JOIN #LINES L ON L.ID = K.ID
+            WHERE L.COMPANY_CODE = @UC AND L.DIVISION = @UD AND L.ORDER_NUMBER = @UO
+              AND K.STATUS_FLAG = 'V';
+        END;
+    END CATCH;
+END;
 
 -- ----------------------------------------------------------------------------
--- 6. Record the failures on the staging rows
+-- 6. Run summary (the tracker #LOAD_TRACK stays available in this session)
 -- ----------------------------------------------------------------------------
-UPDATE K
-SET STATUS_FLAG     = 'F',
-    RS_MESSAGE_TEXT = CASE WHEN F.ROOT = 1
-                           THEN LEFT(CONCAT('Failed due to : ', ISNULL(F.REASON, 'unknown error')), 500)
-                           ELSE 'Failed because other line of this order failed loading' END
-FROM FIN.KAS_SO_LOADS K
-JOIN #FAILED F ON F.ID = K.ID
-WHERE K.STATUS_FLAG = 'V';
-
-DECLARE @LoadedLines INT, @LoadedOrders INT, @FailedLines INT;
-SELECT @LoadedLines = COUNT(*), @LoadedOrders = COUNT(DISTINCT L.ORDER_NUMBER)
-FROM #LINES L JOIN FIN.KAS_SO_LOADS K ON K.ID = L.ID WHERE K.STATUS_FLAG = 'P';
-SELECT @FailedLines = COUNT(*) FROM #FAILED;
+DECLARE @LoadedLines INT, @LoadedOrders INT, @PreFailedLines INT, @LoadFailedLines INT;
+SELECT @LoadedLines = COUNT(*), @LoadedOrders = COUNT(DISTINCT ORDER_NUMBER)
+FROM #LOAD_TRACK WHERE FINAL_STATUS = 'P';
+SELECT @PreFailedLines  = COUNT(*) FROM #FAILED;       -- found by the pre-checks (includes lines never tracked)
+SELECT @LoadFailedLines = COUNT(*) FROM #LOAD_TRACK WHERE FINAL_STATUS = 'F' AND ISNULL(FAIL_TABLE, '') <> 'PRE-CHECK';
 
 PRINT CONCAT('LOAD_SO_COMPLETE: loaded ', @LoadedOrders, ' order(s) / ', @LoadedLines,
-             ' line(s); ', @FailedLines, ' line(s) marked F (see KAS_SO_LOADS.RS_MESSAGE_TEXT).');
+             ' line(s); ', @PreFailedLines + @LoadFailedLines, ' line(s) marked F (',
+             @PreFailedLines, ' by pre-checks, ', @LoadFailedLines,
+             ' by a failed load; see KAS_SO_LOADS.RS_MESSAGE_TEXT).');
+
+SELECT FINAL_STATUS, COUNT(*) AS RECORDS FROM #LOAD_TRACK GROUP BY FINAL_STATUS;
+
+-- every tracked record that failed: the one with a FAIL_TABLE / ERROR_MESSAGE is the record that failed
+SELECT * FROM #LOAD_TRACK WHERE FINAL_STATUS = 'F' ORDER BY COMPANY_CODE, DIVISION, ORDER_NUMBER, LINE_NO;
 
 END TRY
 BEGIN CATCH
@@ -1271,7 +1426,7 @@ BEGIN CATCH
         UPDATE K
         SET STATUS_FLAG     = 'F',
             RS_MESSAGE_TEXT = CASE WHEN F.ROOT = 1
-                                   THEN LEFT(CONCAT('Failed due to : ', ISNULL(F.REASON, 'unknown error')), 500)
+                                   THEN LEFT(CONCAT('Failed due to : ', ISNULL(F.REASON, 'unknown error')), @MsgMax)
                                    ELSE 'Failed because other line of this order failed loading' END
         FROM FIN.KAS_SO_LOADS K
         JOIN #FAILED F ON F.ID = K.ID
@@ -1280,7 +1435,7 @@ BEGIN CATCH
     IF OBJECT_ID('tempdb..#KAS_VALID') IS NOT NULL
         UPDATE K
         SET STATUS_FLAG     = 'F',
-            RS_MESSAGE_TEXT = LEFT(CONCAT('Failed due to : ', @FATAL), 500)
+            RS_MESSAGE_TEXT = LEFT(CONCAT('Failed due to : ', @FATAL), @MsgMax)
         FROM FIN.KAS_SO_LOADS K
         JOIN #KAS_VALID V ON V.ID = K.ID
         WHERE K.STATUS_FLAG = 'V';
