@@ -1,16 +1,37 @@
 -- ============================================================================
--- LOAD_SO_SINGLE_NON_PACKAGED.sql
--- Scenario: Single non-packaged
---   PRODUCT_MASTER.IC_PRODUCT_UOM_CONTROL = 'S'
---   PRODUCT_MASTER.IC_PACKAGED_PRODUCT    = 'N'
--- 
+-- LOAD_SO_COMPLETE.sql
+-- ONE sales order loader for every supported product type. Each KAS_SO_LOADS row is
+-- classified by its PRODUCT_MASTER.
+-- and loaded accordingly:
+--
+--   SN  single / non-packaged   IC_PRODUCT_UOM_CONTROL = 'S', IC_PACKAGED_PRODUCT = 'N'
+--         1 quantity row  : UNIT_SALES = QUANTITY
+--   SP  single / packaged       IC_PRODUCT_UOM_CONTROL = 'S', IC_PACKAGED_PRODUCT = 'Y'
+--         2 quantity rows : UNIT_SALES (packaging unit) = QUANTITY
+--                           IC_UNIT_CAPACITY (inventory unit) =
+--                             FIN.RS_UOM_CONVERSION(company, part, UNIT_SALES, IC_UNIT_CAPACITY, QUANTITY)
+--   PN  potent / non-packaged   IC_PRODUCT_UOM_CONTROL = 'P', IC_PACKAGED_PRODUCT = 'N'
+--         2 quantity rows : UNIT_SALES (e.g. LBS) = QUANTITY
+--                           formula unit (e.g. SLBS) = LBS * lot-characteristic default (ACTBRX)
+--                                                          / product-characteristic default (STDBRX)
+--                           (a sales order has no lot yet, so the product defaults are used;
+--                            formula via PART_UOM_CONVERSIONS / SYS_FORMULA_DEFINITIONS /
+--                            IC_PRODUCT_CHARACTERISTICS, as in Complete_Loader_Tracked.sql)
+--         the staging unit (KAS_SO_LOADS.UNIT_SALES) must equal PRODUCT_MASTER.UNIT_SALES
+--   Any other combination (e.g. potent / packaged) is not supported: the validator rejects it,
+--   and this loader never loads it.
+--   The two quantity rows are written to SALES_ORDER_LINE_QTYS and SALES_ORDER_LINE_DETAIL_QTYS.
+--
+-- An order may mix SN, SP and PN lines: each line follows the rules of its own category.
+--
 -- Processes only FIN.KAS_SO_LOADS rows with
 --   STATUS_FLAG = 'V' AND RS_MESSAGE_TEXT = 'Validated'
 --
---  ables populated (nothing else is written):
+-- Tables populated (nothing else is written):
 --   SALES_ORDER_HEADERS, SALES_ORDER_LINES, SALES_ORDER_LINE_DETAILS,
 --   SALES_ORDER_LINE_QTYS, SALES_ORDER_LINE_DETAIL_QTYS
---   SALES_ORDER_HISTORY
+--   plus, from FIN.KAS_SO_EXPORT_LOADS (section 7, record by record, validated rows only):
+--   SOP_ORDER_HEADER_EXP_DETAILS, SALES_ORDER_EXPORT_NOTES
 --
 -- Behaviour:
 --   * One sales order per (COMPANY_CODE, DIVISION, CUSTOMER_NUMBER,
@@ -18,19 +39,20 @@
 --     of the grouping key.
 --   * COMPANY_CODE / DIVISION come from the staging rows (no defaults).
 --   * An order group is loaded ONLY when every staging row in the group is
---     validated and belongs to this scenario. Groups with any new / errored /
---     already-processed row, or with another scenario, are skipped whole, so an
---     order is never created from part of its lines.
+--     validated and of a supported category. Groups with any new / errored /
+--     already-processed row are skipped whole, so an order is never created from
+--     part of its lines.
 --   * ORDER_NUMBER: if the staging rows already carry an ORDER_NUMBER, that number
 --     is used for the order (rows with the same provided number and the same
 --     customer/reference form one order; different provided numbers = different
 --     orders). Rows with no ORDER_NUMBER get a number allocated from
---     FIN.SOP_TRANSACTION_TYPES (TRANSACTION_TYPE = 'SO') under UPDLOCK/HOLDLOCK,
---     exactly as before. Provided numbers do not move the counter.
+--     FIN.SOP_TRANSACTION_TYPES (TRANSACTION_TYPE = 'SO') under UPDLOCK/HOLDLOCK.
+--     Provided numbers do not move the counter.
 --     A provided number is SKIPPED (group stays 'V', listed in a result set) when it
 --     is longer than 9 characters, already exists on SALES_ORDER_HEADERS, or is used
 --     by more than one customer/reference group.
 --   * Prices / freight come from the CSV staging values only.
+--   * SALES_ORDER_HEADERS.EDI_ORDER (Y/N) is populated from KAS_SO_LOADS.EDI_ORDER.
 --   * IC demand / reservations / commitments are NOT written (IC engine owns them).
 --   * Serialized with the validator and CLEAR_SO_TABLES by an application lock
 --     (session-owned, released at the end).
@@ -42,9 +64,9 @@
 --                 loading' on every other line of the same order
 --   * HOW FAILURES ARE HANDLED
 --       1. Checks that can be tied to a line (bad quantity, unusable provided order
---          number, missing counter row, missing UOM conversion, weight/volume that
---          cannot be derived, order number collision) fail that order BEFORE anything
---          is written. The order is never attempted.
+--          number, missing counter row, category-specific unit / conversion problems,
+--          missing UOM conversion, weight/volume that cannot be derived, order number
+--          collision) fail that order BEFORE anything is written.
 --       2. All remaining orders are loaded in ONE transaction inside TRY/CATCH.
 --       3. If that batch fails it is rolled back completely and the orders are retried
 --          one per transaction (a failed order is rolled back and not loaded further).
@@ -64,6 +86,13 @@ SET XACT_ABORT ON;
 DECLARE @SO_MODULE VARCHAR(2) = 'SO';
 DECLARE @LOCK_RC   INT;
 
+-- IC_APPROX_QTY_FLAG written on the quantity rows, per product category.
+-- SN: 'N' (working single loader). SP: 'N' (confirm against a manual packaged order).
+-- PN: blank, as on the manually created potent order.
+DECLARE @APPROX_SN VARCHAR(1) = 'N';
+DECLARE @APPROX_SP VARCHAR(1) = 'N';
+DECLARE @APPROX_PN VARCHAR(1) = '';
+
 -- WEIGHT/VOLUME: GEM parameter values (M / D / F confirmed)
 DECLARE @MULT CHAR(1) = 'M', @DIV CHAR(1) = 'D', @FORM CHAR(1) = 'F';
 -- !! FILL IN: stored values of the IC_WTVOL_* parameters
@@ -73,7 +102,7 @@ DECLARE @WV_INVENTORY VARCHAR(10) = 'I';   -- IC_WTVOL_INVENTORY
 DECLARE @WV_PACKAGED  VARCHAR(10) = 'P';   -- IC_WTVOL_PACKAGED
 IF @WV_ACTUAL IS NULL OR @WV_FIXED IS NULL OR @WV_INVENTORY IS NULL OR @WV_PACKAGED IS NULL
 BEGIN
-    RAISERROR('LOAD_SO_SINGLE_NON_PACKAGED: set @WV_ACTUAL / @WV_FIXED / @WV_INVENTORY / @WV_PACKAGED from the IC_WTVOL_* parameters.', 16, 1);
+    RAISERROR('LOAD_SO_COMPLETE: set @WV_ACTUAL / @WV_FIXED / @WV_INVENTORY / @WV_PACKAGED from the IC_WTVOL_* parameters.', 16, 1);
     RETURN;
 END
 
@@ -101,7 +130,7 @@ EXEC @LOCK_RC = sys.sp_getapplock @Resource = N'KAS_SO_LOADS_PIPELINE',
                                   @LockMode = 'Exclusive', @LockOwner = 'Session', @LockTimeout = 0;
 IF @LOCK_RC < 0
 BEGIN
-    RAISERROR('LOAD_SO_SINGLE_NON_PACKAGED: another validate/load/clear run is in progress. Try again when it finishes.', 16, 1);
+    RAISERROR('LOAD_SO_COMPLETE: another validate/load/clear run is in progress. Try again when it finishes.', 16, 1);
     RETURN;
 END
 
@@ -128,13 +157,16 @@ SELECT
        K.CUSTOMER_NUMBER,
        K.DELIVERY_ADDRESS_CODE,
        K.CUSTOMER_REFERENCE,
+       K.EDI_ORDER,
        K.SYS_DELIVERY_DATE,
        K.WAREHOUSE,
        K.PART_CODE,
        ISNULL(K.QUANTITY, 0)    AS QUANTITY,
        ISNULL(K.SALES_PRICE, 0) AS SALES_PRICE,
        ISNULL(K.FREIGHT, 0)     AS FREIGHT,
+       K.UNIT_SALES             AS STG_UNIT_SALES,   -- unit sent on the staging row (checked for PN only)
        PM.UNIT_SALES,
+       PM.IC_UNIT_CAPACITY      AS CAP_UOM,          -- inventory (capacity) unit (used by SP)
        PM.UNIT_PRICE,
        PM.PRODUCT_GROUP,
        PM.PRODUCT_TAX_CODE,
@@ -153,8 +185,13 @@ SELECT
        ISNULL(AC.DEFAULT_VOLUME_UNIT, '')       AS HDR_VOLUME_UOM,
        CASE WHEN PM.IC_PACKAGED_PRODUCT = 'Y'
             THEN PM.UNIT_SALES ELSE '' END AS IC_PACK_UNIT,
-       CASE WHEN PM.IC_PRODUCT_UOM_CONTROL = 'S'
-             AND PM.IC_PACKAGED_PRODUCT    = 'N'
+       -- product category, same split as Complete_Loader_Tracked.sql (NULL = not supported)
+       CASE WHEN PM.IC_PRODUCT_UOM_CONTROL = 'S' AND PM.IC_PACKAGED_PRODUCT = 'N' THEN 'SN'
+            WHEN PM.IC_PRODUCT_UOM_CONTROL = 'S' AND PM.IC_PACKAGED_PRODUCT = 'Y' THEN 'SP'
+            WHEN PM.IC_PRODUCT_UOM_CONTROL = 'P' AND PM.IC_PACKAGED_PRODUCT = 'N' THEN 'PN'
+       END AS CAT,
+       CASE WHEN (PM.IC_PRODUCT_UOM_CONTROL = 'S' AND PM.IC_PACKAGED_PRODUCT IN ('N','Y'))
+              OR (PM.IC_PRODUCT_UOM_CONTROL = 'P' AND PM.IC_PACKAGED_PRODUCT = 'N')
             THEN 1 ELSE 0 END AS IS_TARGET,
        -- order number already provided on the staging row (NULL = allocate one)
        NULLIF(LTRIM(RTRIM(K.ORDER_NUMBER)), '') AS PROV_ORDER,
@@ -216,7 +253,7 @@ DECLARE @SKIPPED INT =
      JOIN #BLOCKED_GROUPS B ON B.GROUP_KEY = V.BASE_KEY
      WHERE V.IS_TARGET = 1);
 IF @SKIPPED > 0
-    PRINT CONCAT('LOAD_SO_SINGLE_NON_PACKAGED: skipped ', @SKIPPED,
+    PRINT CONCAT('LOAD_SO_COMPLETE: skipped ', @SKIPPED,
                  ' order group(s) that still contain non-validated or already-processed staging rows.');
 
 -- ----------------------------------------------------------------------------
@@ -257,7 +294,7 @@ BEGIN
     JOIN #BAD_PROV B ON B.GROUP_KEY = V.GROUP_KEY
     WHERE NOT EXISTS (SELECT 1 FROM #FAILED F WHERE F.ID = V.ID);
     DELETE V FROM #KAS_VALID V WHERE EXISTS (SELECT 1 FROM #FAILED F WHERE F.ID = V.ID);
-    PRINT CONCAT('LOAD_SO_SINGLE_NON_PACKAGED: ', (SELECT COUNT(*) FROM #BAD_PROV),
+    PRINT CONCAT('LOAD_SO_COMPLETE: ', (SELECT COUNT(*) FROM #BAD_PROV),
                  ' order group(s) failed: unusable provided ORDER_NUMBER (marked F).');
 END
 
@@ -276,7 +313,7 @@ WHERE EXISTS (SELECT 1 FROM #FAILED F WHERE F.GROUP_KEY = V.GROUP_KEY AND F.ROOT
 DELETE V FROM #KAS_VALID V WHERE EXISTS (SELECT 1 FROM #FAILED F WHERE F.ID = V.ID);
 
 IF NOT EXISTS (SELECT 1 FROM #KAS_VALID)
-    PRINT 'LOAD_SO_SINGLE_NON_PACKAGED: no eligible validated rows left to load for scenario (S,N).';
+    PRINT 'LOAD_SO_COMPLETE: no eligible validated rows left to load (supported categories: SN, SP, PN).';
 
 -- ----------------------------------------------------------------------------
 -- 3. Order groups (warehouse excluded)
@@ -288,6 +325,7 @@ SELECT GROUP_KEY,
        MIN(CUSTOMER_NUMBER)       AS CUSTOMER_NUMBER,
        MIN(DELIVERY_ADDRESS_CODE) AS DELIVERY_ADDRESS_CODE,
        MIN(CUSTOMER_REFERENCE)    AS CUSTOMER_REFERENCE,
+       MIN(EDI_ORDER)             AS EDI_ORDER,
        MIN(ORDER_DATE)            AS ORDER_DATE,
        MIN(SYS_DELIVERY_DATE)     AS SYS_DELIVERY_DATE,
        COALESCE(SUM(QUANTITY * SALES_PRICE), 0) AS LINE_VALUE,
@@ -348,6 +386,7 @@ SELECT G.GROUP_KEY,
        G.CUSTOMER_NUMBER,
        G.DELIVERY_ADDRESS_CODE,
        G.CUSTOMER_REFERENCE,
+       G.EDI_ORDER,
        G.ORDER_DATE,
        G.SYS_DELIVERY_DATE,
        G.LINE_VALUE,
@@ -372,6 +411,7 @@ SELECT G.GROUP_KEY,
        G.CUSTOMER_NUMBER,
        G.DELIVERY_ADDRESS_CODE,
        G.CUSTOMER_REFERENCE,
+       G.EDI_ORDER,
        G.ORDER_DATE,
        G.SYS_DELIVERY_DATE,
        G.LINE_VALUE,
@@ -409,12 +449,189 @@ FROM #KAS_VALID K
 JOIN #SO_ORDERS O ON O.GROUP_KEY = K.GROUP_KEY;
 
 IF (SELECT COUNT(*) FROM #LINES) <> (SELECT COUNT(*) FROM #KAS_VALID)
-    THROW 50001, 'LOAD_SO_SINGLE_NON_PACKAGED: line count does not match validated staging rows.', 1;
+    THROW 50001, 'LOAD_SO_COMPLETE: line count does not match validated staging rows.', 1;
 
 
 ALTER TABLE #LINES ADD
     ITEM_WEIGHT DECIMAL(28,10) NULL, ITEM_VOLUME DECIMAL(28,10) NULL,
-    WEIGHT_HDR  DECIMAL(28,10) NULL, VOLUME_HDR  DECIMAL(28,10) NULL;
+    WEIGHT_HDR  DECIMAL(28,10) NULL, VOLUME_HDR  DECIMAL(28,10) NULL,
+    SEC_UOM     VARCHAR(50)    NULL,                  -- PN: potency unit (e.g. SLBS)
+    SEC_QTY     DECIMAL(28,10) NULL,                  -- PN: quantity in the potency unit
+    SEC_MATCHES INT            NULL,                  -- PN: number of different formula conversions found
+    CAP_QTY     DECIMAL(28,10) NULL,                  -- SP: QUANTITY converted to the inventory (capacity) unit
+    CAP_DONE    BIT            NOT NULL DEFAULT 0,    -- SP: conversion attempted for this line
+    U2_UOM      VARCHAR(50)    NULL,                  -- second quantity unit of the line (SP / PN), NULL for SN
+    U2_QTY      DECIMAL(28,10) NULL,                  -- quantity in the second unit
+    WT_UOM      VARCHAR(50)    NULL, WT_QTY  DECIMAL(28,10) NULL,   -- quantity/unit the weight rule uses
+    VOL_UOM     VARCHAR(50)    NULL, VOL_QTY DECIMAL(28,10) NULL;   -- quantity/unit the volume rule uses
+
+-- ============================================================================
+-- 4b2. Category specific quantity conversions. Lines of category SN need none.
+--      Each check fails the line's order BEFORE anything is written.
+-- ============================================================================
+
+-- ---- PN: potency conversion (LBS -> SLBS), as Complete_Loader_Tracked.sql (category PN)
+--      SLBS = LBS * <lot characteristic default> / <product characteristic default>
+--      A sales order line has no lot yet, so the product defaults are used for both.
+UPDATE L
+SET SEC_MATCHES = F.N_MATCH,
+    SEC_UOM     = CASE WHEN F.N_MATCH = 1 THEN F.ACT_UOM END,
+    SEC_QTY     = CASE WHEN F.N_MATCH = 1 THEN F.ACT_QTY END
+FROM #LINES L
+CROSS APPLY (
+    SELECT MIN(X.ACT_UOM) AS ACT_UOM, MIN(X.ACT_QTY) AS ACT_QTY,
+           COUNT(DISTINCT CONCAT(X.ACT_UOM, '|', X.ACT_QTY)) AS N_MATCH
+    FROM (SELECT PUC.UNIT_TO AS ACT_UOM,
+                 CAST(L.QUANTITY AS DECIMAL(28,10)) * PCL.IC_DEF_CHAR_NUMERIC
+                         / NULLIF(PC.IC_DEF_CHAR_NUMERIC, 0) AS ACT_QTY
+          FROM FIN.PART_UOM_CONVERSIONS PUC
+          JOIN FIN.SYS_FORMULA_DEFINITIONS FD_LOT
+               ON FD_LOT.SYS_FORMULA_CODE = PUC.SYS_FORMULA_CODE AND FD_LOT.SYS_DEFINITION_TYPE = 'L'
+          JOIN FIN.SYS_FORMULA_DEFINITIONS FD_PROD
+               ON FD_PROD.SYS_FORMULA_CODE = PUC.SYS_FORMULA_CODE AND FD_PROD.SYS_DEFINITION_TYPE = 'P'
+          JOIN FIN.IC_PRODUCT_CHARACTERISTICS PCL
+               ON PCL.COMPANY_CODE = L.COMPANY_CODE AND PCL.PART_CODE = L.PART_CODE
+              AND PCL.CHARACTERISTIC_CODE = FD_LOT.CHARACTERISTIC_CODE
+          JOIN FIN.IC_PRODUCT_CHARACTERISTICS PC
+               ON PC.COMPANY_CODE = L.COMPANY_CODE AND PC.PART_CODE = L.PART_CODE
+              AND PC.CHARACTERISTIC_CODE = FD_PROD.CHARACTERISTIC_CODE
+          WHERE PUC.COMPANY_CODE = L.COMPANY_CODE
+            AND PUC.PART_CODE    = L.PART_CODE
+            AND PUC.UNIT_FROM    = L.UNIT_SALES
+            AND PUC.SYS_FORMULA_CODE <> '') X
+) F
+WHERE L.CAT = 'PN';
+
+INSERT INTO #FAILED (ID, GROUP_KEY, ROOT, REASON)
+SELECT L.ID, L.GROUP_KEY, 1,
+       CASE WHEN L.SEC_MATCHES > 1
+                 THEN CONCAT('More than one different formula-driven UOM conversion matches part ', L.PART_CODE,
+                             ' from unit ', L.UNIT_SALES, ': the potency unit and quantity are ambiguous')
+            WHEN L.SEC_UOM = L.UNIT_SALES
+                 THEN CONCAT('Potency conversion for part ', L.PART_CODE, ' converts unit ', L.UNIT_SALES, ' to itself')
+            ELSE CONCAT('No usable formula-driven UOM conversion for part ', L.PART_CODE, ' from unit ', L.UNIT_SALES,
+                        ' (PART_UOM_CONVERSIONS / SYS_FORMULA_DEFINITIONS / IC_PRODUCT_CHARACTERISTICS defaults missing, STDBRX is zero, or sales unit is not the formula source unit)')
+       END
+FROM #LINES L
+WHERE L.CAT = 'PN'
+  AND (L.SEC_MATCHES <> 1
+       OR NULLIF(LTRIM(RTRIM(L.SEC_UOM)), '') IS NULL
+       OR L.SEC_QTY IS NULL
+       OR L.SEC_UOM = L.UNIT_SALES)
+  AND NOT EXISTS (SELECT 1 FROM #FAILED F WHERE F.ID = L.ID);
+
+-- ---- PN: the unit on the staging row (KAS_SO_LOADS.UNIT_SALES) must equal PRODUCT_MASTER.UNIT_SALES.
+--      The order is always loaded in the product's own sales unit; the staging unit is only checked.
+INSERT INTO #FAILED (ID, GROUP_KEY, ROOT, REASON)
+SELECT L.ID, L.GROUP_KEY, 1,
+       CASE WHEN NULLIF(LTRIM(RTRIM(L.STG_UNIT_SALES)), '') IS NULL
+            THEN CONCAT('Staging UNIT_SALES is blank; it must equal the sales unit ', L.UNIT_SALES, ' of part ', L.PART_CODE)
+            ELSE CONCAT('Staging UNIT_SALES ', L.STG_UNIT_SALES, ' does not match PRODUCT_MASTER.UNIT_SALES ',
+                        L.UNIT_SALES, ' of part ', L.PART_CODE)
+       END
+FROM #LINES L
+WHERE L.CAT = 'PN'
+  AND NOT EXISTS (SELECT 1 FROM #FAILED F WHERE F.ID = L.ID)
+  AND ISNULL(LTRIM(RTRIM(L.STG_UNIT_SALES)), '') <> ISNULL(LTRIM(RTRIM(L.UNIT_SALES)), '');
+
+-- ---- PN: both units of the potent pair must be defined for the part in IC_PRODUCT_MASTER_UNITS
+INSERT INTO #FAILED (ID, GROUP_KEY, ROOT, REASON)
+SELECT L.ID, L.GROUP_KEY, 1,
+       CASE WHEN NOT EXISTS (SELECT 1 FROM FIN.IC_PRODUCT_MASTER_UNITS U
+                             WHERE U.COMPANY_CODE = L.COMPANY_CODE AND U.PART_CODE = L.PART_CODE
+                               AND LTRIM(RTRIM(U.UNIT_OF_MEASURE)) = LTRIM(RTRIM(L.UNIT_SALES)))
+            THEN CONCAT('Sales unit ', L.UNIT_SALES, ' is not defined for part ', L.PART_CODE, ' in IC_PRODUCT_MASTER_UNITS')
+            ELSE CONCAT('Potency unit ', L.SEC_UOM, ' (from the UOM conversion formula) is not defined for part ',
+                        L.PART_CODE, ' in IC_PRODUCT_MASTER_UNITS')
+       END
+FROM #LINES L
+WHERE L.CAT = 'PN'
+  AND NOT EXISTS (SELECT 1 FROM #FAILED F WHERE F.ID = L.ID)
+  AND (NOT EXISTS (SELECT 1 FROM FIN.IC_PRODUCT_MASTER_UNITS U
+                   WHERE U.COMPANY_CODE = L.COMPANY_CODE AND U.PART_CODE = L.PART_CODE
+                     AND LTRIM(RTRIM(U.UNIT_OF_MEASURE)) = LTRIM(RTRIM(L.UNIT_SALES)))
+       OR NOT EXISTS (SELECT 1 FROM FIN.IC_PRODUCT_MASTER_UNITS U
+                      WHERE U.COMPANY_CODE = L.COMPANY_CODE AND U.PART_CODE = L.PART_CODE
+                        AND LTRIM(RTRIM(U.UNIT_OF_MEASURE)) = LTRIM(RTRIM(L.SEC_UOM))));
+
+-- ---- SP: packaging -> inventory (capacity) unit, as Complete_Loader_Tracked.sql (category SP):
+--      CAP_QTY = FIN.RS_UOM_CONVERSION(company, part, UNIT_SALES, IC_UNIT_CAPACITY, QUANTITY)
+--      Pre-checks first (clear reasons), then the function is called line by line inside its own
+--      TRY/CATCH: one bad line fails its order, never the whole run.
+INSERT INTO #FAILED (ID, GROUP_KEY, ROOT, REASON)
+SELECT L.ID, L.GROUP_KEY, 1,
+       CASE
+         WHEN NULLIF(LTRIM(RTRIM(L.CAP_UOM)), '') IS NULL
+              THEN CONCAT('Packaged part ', L.PART_CODE, ': PRODUCT_MASTER.IC_UNIT_CAPACITY (inventory unit) is blank')
+         WHEN LTRIM(RTRIM(L.CAP_UOM)) = LTRIM(RTRIM(L.UNIT_SALES))
+              THEN CONCAT('Packaged part ', L.PART_CODE, ': sales unit ', L.UNIT_SALES,
+                          ' is the inventory unit (IC_UNIT_CAPACITY); it must be a packaging unit')
+         WHEN NOT EXISTS (SELECT 1 FROM FIN.IC_PRODUCT_MASTER_UNITS U
+                          WHERE U.COMPANY_CODE = L.COMPANY_CODE AND U.PART_CODE = L.PART_CODE
+                            AND U.IC_PRODUCT_UOM_TYPE = 'P'
+                            AND LTRIM(RTRIM(U.UNIT_OF_MEASURE)) = LTRIM(RTRIM(L.UNIT_SALES)))
+              THEN CONCAT('Sales unit ', L.UNIT_SALES, ' is not a packaging unit (IC_PRODUCT_UOM_TYPE = P) of part ',
+                          L.PART_CODE, ' in IC_PRODUCT_MASTER_UNITS')
+         ELSE CONCAT('Inventory unit ', L.CAP_UOM, ' (IC_UNIT_CAPACITY) is not defined for part ',
+                     L.PART_CODE, ' in IC_PRODUCT_MASTER_UNITS')
+       END
+FROM #LINES L
+WHERE L.CAT = 'SP'
+  AND NOT EXISTS (SELECT 1 FROM #FAILED F WHERE F.ID = L.ID)
+  AND (NULLIF(LTRIM(RTRIM(L.CAP_UOM)), '') IS NULL
+       OR LTRIM(RTRIM(L.CAP_UOM)) = LTRIM(RTRIM(L.UNIT_SALES))
+       OR NOT EXISTS (SELECT 1 FROM FIN.IC_PRODUCT_MASTER_UNITS U
+                      WHERE U.COMPANY_CODE = L.COMPANY_CODE AND U.PART_CODE = L.PART_CODE
+                        AND U.IC_PRODUCT_UOM_TYPE = 'P'
+                        AND LTRIM(RTRIM(U.UNIT_OF_MEASURE)) = LTRIM(RTRIM(L.UNIT_SALES)))
+       OR NOT EXISTS (SELECT 1 FROM FIN.IC_PRODUCT_MASTER_UNITS U
+                      WHERE U.COMPANY_CODE = L.COMPANY_CODE AND U.PART_CODE = L.PART_CODE
+                        AND LTRIM(RTRIM(U.UNIT_OF_MEASURE)) = LTRIM(RTRIM(L.CAP_UOM))));
+
+DECLARE @CAP_ID INT;
+WHILE 1 = 1
+BEGIN
+    SET @CAP_ID = NULL;
+    SELECT TOP (1) @CAP_ID = L.ID
+    FROM #LINES L
+    WHERE L.CAT = 'SP'
+      AND L.CAP_DONE = 0
+      AND NOT EXISTS (SELECT 1 FROM #FAILED F WHERE F.ID = L.ID)
+    ORDER BY L.ID;
+    IF @CAP_ID IS NULL BREAK;
+
+    BEGIN TRY
+        UPDATE L
+        SET CAP_QTY = FIN.RS_UOM_CONVERSION(L.COMPANY_CODE, L.PART_CODE, L.UNIT_SALES, L.CAP_UOM, L.QUANTITY)
+        FROM #LINES L
+        WHERE L.ID = @CAP_ID;
+    END TRY
+    BEGIN CATCH
+        INSERT INTO #FAILED (ID, GROUP_KEY, ROOT, REASON)
+        SELECT L.ID, L.GROUP_KEY, 1,
+               CONCAT('Packaging quantity conversion ', L.UNIT_SALES, ' -> ', L.CAP_UOM, ' failed for part ',
+                      L.PART_CODE, ': ', ERROR_MESSAGE())
+        FROM #LINES L
+        WHERE L.ID = @CAP_ID AND NOT EXISTS (SELECT 1 FROM #FAILED F WHERE F.ID = L.ID);
+    END CATCH;
+
+    UPDATE #LINES SET CAP_DONE = 1 WHERE ID = @CAP_ID;
+END;
+
+INSERT INTO #FAILED (ID, GROUP_KEY, ROOT, REASON)
+SELECT L.ID, L.GROUP_KEY, 1,
+       CONCAT('Packaging quantity conversion ', L.UNIT_SALES, ' -> ', L.CAP_UOM, ' for part ', L.PART_CODE,
+              CASE WHEN L.CAP_QTY IS NULL THEN ' returned NULL (no UOM conversion defined?)'
+                   ELSE ' did not return a positive quantity' END)
+FROM #LINES L
+WHERE L.CAT = 'SP'
+  AND (L.CAP_QTY IS NULL OR L.CAP_QTY <= 0)
+  AND NOT EXISTS (SELECT 1 FROM #FAILED F WHERE F.ID = L.ID);
+
+-- ---- second quantity unit of the line: SP = inventory unit, PN = potency unit, SN = none
+UPDATE #LINES
+SET U2_UOM = CASE CAT WHEN 'SP' THEN CAP_UOM WHEN 'PN' THEN SEC_UOM END,
+    U2_QTY = CASE CAT WHEN 'SP' THEN CAP_QTY WHEN 'PN' THEN SEC_QTY END;
 
 -- ----------------------------------------------------------------------------
 -- 4c. UOM conversions needed (LB_S_L_DO_UOM_CONVERSIONS), resolved once each
@@ -534,43 +751,62 @@ WHERE (C.FROM_UNIT_OK = 0 OR C.TO_UNIT_OK = 0
 GROUP BY U.ID;
 
 -- ----------------------------------------------------------------------------
--- 4d. Line weight / volume (LB_S_L_WTVOL).  Quantity = staging QUANTITY in
---     UNIT_SALES (= nominated UOM for stock single-UOM lines); 2nd/3rd UOMs
---     are blank for this scenario.  NULL result = DML error (P_90247 / not
+-- 4d. Line weight / volume (LB_S_L_WTVOL).  A line has its quantity in UNIT_SALES (QUANTITY) and,
+--     for SP / PN, in a second unit (U2_UOM / U2_QTY).  The weight / volume rule works from the
+--     unit it names (the weight UOM for ACTUAL, the from-UOM for FIXED / INVENTORY), so the
+--     quantity expressed in THAT unit is used; if neither unit matches, the sales-unit quantity
+--     is used and the rule yields NULL as before.  NULL result = DML error (P_90247 / not
 --     supported) -> guarded below.
 -- ----------------------------------------------------------------------------
 UPDATE L
+SET WT_UOM  = CASE WHEN T.WT_TGT <> '' AND T.WT_TGT = L.UNIT_SALES THEN L.UNIT_SALES
+                   WHEN T.WT_TGT <> '' AND T.WT_TGT = L.U2_UOM     THEN L.U2_UOM
+                   ELSE L.UNIT_SALES END,
+    WT_QTY  = CASE WHEN T.WT_TGT <> '' AND T.WT_TGT = L.UNIT_SALES THEN CAST(L.QUANTITY AS DECIMAL(28,10))
+                   WHEN T.WT_TGT <> '' AND T.WT_TGT = L.U2_UOM     THEN L.U2_QTY
+                   ELSE CAST(L.QUANTITY AS DECIMAL(28,10)) END,
+    VOL_UOM = CASE WHEN T.VOL_TGT <> '' AND T.VOL_TGT = L.UNIT_SALES THEN L.UNIT_SALES
+                   WHEN T.VOL_TGT <> '' AND T.VOL_TGT = L.U2_UOM     THEN L.U2_UOM
+                   ELSE L.UNIT_SALES END,
+    VOL_QTY = CASE WHEN T.VOL_TGT <> '' AND T.VOL_TGT = L.UNIT_SALES THEN CAST(L.QUANTITY AS DECIMAL(28,10))
+                   WHEN T.VOL_TGT <> '' AND T.VOL_TGT = L.U2_UOM     THEN L.U2_QTY
+                   ELSE CAST(L.QUANTITY AS DECIMAL(28,10)) END
+FROM #LINES L
+CROSS APPLY (SELECT CASE WHEN L.WT_CTRL  = @WV_ACTUAL THEN L.ITEM_WEIGHT_UOM ELSE L.WT_FROM_UOM END AS WT_TGT,
+                    CASE WHEN L.VOL_CTRL = @WV_ACTUAL THEN L.ITEM_VOLUME_UOM ELSE L.VOL_FROM_UOM END AS VOL_TGT) T;
+
+UPDATE L
 SET ITEM_WEIGHT = CASE
         WHEN L.WT_CTRL = @WV_ACTUAL THEN
-             CASE WHEN L.UNIT_SALES = L.ITEM_WEIGHT_UOM THEN CAST(L.QUANTITY AS DECIMAL(28,10))
+             CASE WHEN L.WT_UOM = L.ITEM_WEIGHT_UOM THEN L.WT_QTY
                   WHEN L.ITEM_WEIGHT_UOM = '' THEN 0 END
         WHEN L.WT_CTRL = @WV_FIXED THEN
-             CASE WHEN L.UNIT_SALES = L.WT_FROM_UOM
-                       THEN CAST(L.QUANTITY AS DECIMAL(28,10)) * CAST(L.WT_FIXED AS DECIMAL(28,10))
+             CASE WHEN L.WT_UOM = L.WT_FROM_UOM
+                       THEN L.WT_QTY * CAST(L.WT_FIXED AS DECIMAL(28,10))
                   WHEN L.WT_FROM_UOM = '' THEN 0 END
         WHEN L.WT_CTRL = @WV_INVENTORY THEN
-             CASE WHEN L.UNIT_SALES <> L.WT_FROM_UOM OR L.WT_FROM_UOM = '' THEN NULL
-                  WHEN L.WT_FROM_UOM = L.ITEM_WEIGHT_UOM THEN CAST(L.QUANTITY AS DECIMAL(28,10))
+             CASE WHEN L.WT_UOM <> L.WT_FROM_UOM OR L.WT_FROM_UOM = '' THEN NULL
+                  WHEN L.WT_FROM_UOM = L.ITEM_WEIGHT_UOM THEN L.WT_QTY
                   ELSE ROUND(CASE CW.METHOD
-                                 WHEN @MULT THEN CAST(L.QUANTITY AS DECIMAL(28,10)) * CW.FACTOR
-                                 WHEN @DIV  THEN CAST(L.QUANTITY AS DECIMAL(28,10)) / NULLIF(CW.FACTOR, 0) END,
+                                 WHEN @MULT THEN L.WT_QTY * CW.FACTOR
+                                 WHEN @DIV  THEN L.WT_QTY / NULLIF(CW.FACTOR, 0) END,
                              CW.DP_TO) END
         WHEN L.WT_CTRL = @WV_PACKAGED THEN NULL
         ELSE 0 END,
     ITEM_VOLUME = CASE
         WHEN L.VOL_CTRL = @WV_ACTUAL THEN
-             CASE WHEN L.UNIT_SALES = L.ITEM_VOLUME_UOM THEN CAST(L.QUANTITY AS DECIMAL(28,10))
+             CASE WHEN L.VOL_UOM = L.ITEM_VOLUME_UOM THEN L.VOL_QTY
                   WHEN L.ITEM_VOLUME_UOM = '' THEN 0 END
         WHEN L.VOL_CTRL = @WV_FIXED THEN
-             CASE WHEN L.UNIT_SALES = L.VOL_FROM_UOM
-                       THEN CAST(L.QUANTITY AS DECIMAL(28,10)) * CAST(L.VOL_FIXED AS DECIMAL(28,10))
+             CASE WHEN L.VOL_UOM = L.VOL_FROM_UOM
+                       THEN L.VOL_QTY * CAST(L.VOL_FIXED AS DECIMAL(28,10))
                   WHEN L.VOL_FROM_UOM = '' THEN 0 END
         WHEN L.VOL_CTRL = @WV_INVENTORY THEN
-             CASE WHEN L.UNIT_SALES <> L.VOL_FROM_UOM OR L.VOL_FROM_UOM = '' THEN NULL
-                  WHEN L.VOL_FROM_UOM = L.ITEM_VOLUME_UOM THEN CAST(L.QUANTITY AS DECIMAL(28,10))
+             CASE WHEN L.VOL_UOM <> L.VOL_FROM_UOM OR L.VOL_FROM_UOM = '' THEN NULL
+                  WHEN L.VOL_FROM_UOM = L.ITEM_VOLUME_UOM THEN L.VOL_QTY
                   ELSE ROUND(CASE CV.METHOD
-                                 WHEN @MULT THEN CAST(L.QUANTITY AS DECIMAL(28,10)) * CV.FACTOR
-                                 WHEN @DIV  THEN CAST(L.QUANTITY AS DECIMAL(28,10)) / NULLIF(CV.FACTOR, 0) END,
+                                 WHEN @MULT THEN L.VOL_QTY * CV.FACTOR
+                                 WHEN @DIV  THEN L.VOL_QTY / NULLIF(CV.FACTOR, 0) END,
                              CV.DP_TO) END
         WHEN L.VOL_CTRL = @WV_PACKAGED THEN NULL
         ELSE 0 END
@@ -584,6 +820,7 @@ LEFT JOIN #CONV CV ON CV.COMPANY_CODE = L.COMPANY_CODE AND CV.PART_CODE = L.PART
 INSERT INTO #FAILED (ID, GROUP_KEY, ROOT, REASON)
 SELECT L.ID, L.GROUP_KEY, 1,
        CONCAT('Weight/volume cannot be derived for part ', L.PART_CODE, ': sales unit ', L.UNIT_SALES,
+              ' / second unit ', ISNULL(L.U2_UOM, ''),
               ' does not match the product weight/volume units (weight control ', L.WT_CTRL,
               ', weight UOM ', L.ITEM_WEIGHT_UOM, ', weight-from UOM ', L.WT_FROM_UOM,
               '; volume control ', L.VOL_CTRL, ', volume UOM ', L.ITEM_VOLUME_UOM,
@@ -636,7 +873,7 @@ WHERE EXISTS (SELECT 1 FROM #FAILED F WHERE F.GROUP_KEY = L.GROUP_KEY AND F.ROOT
 -- ----------------------------------------------------------------------------
 DECLARE @SEQ INT = 0, @NEXT INT, @KIND CHAR(1), @UC VARCHAR(10), @UD VARCHAR(2), @UO VARCHAR(9),
         @UL INT, @UERR NVARCHAR(2000), @STAGE CHAR(1), @ERRMSG NVARCHAR(2000),
-        @ORD_CNT INT, @LINE_CNT INT, @N INT;
+        @ORD_CNT INT, @LINE_CNT INT, @QTY_CNT INT, @N INT;
 
 IF EXISTS (SELECT 1 FROM #LINES L WHERE NOT EXISTS (SELECT 1 FROM #FAILED F WHERE F.ID = L.ID))
     INSERT INTO #UNIT (KIND) VALUES ('B');
@@ -700,6 +937,9 @@ BEGIN
     SELECT @ORD_CNT = COUNT(*) FROM #RUN_ORDERS;
     SELECT @LINE_CNT = COUNT(*) FROM #RUN_LINES;
     IF @LINE_CNT = 0 CONTINUE;
+    -- quantity rows expected: 1 per SN line, 2 per SP / PN line
+    SELECT @QTY_CNT = COUNT(*) + SUM(CASE WHEN L.CAT <> 'SN' THEN 1 ELSE 0 END)
+    FROM #LINES L JOIN #RUN_LINES RL ON RL.ID = L.ID;
 
     SET @STAGE = 'H';
     SET @ERRMSG = NULL;
@@ -719,7 +959,7 @@ INSERT INTO FIN.SALES_ORDER_HEADERS
  SYS_CURRENCY_FIXED_FLAG, SYS_BASE_CURRENCY, SYS_CURRENCY_DATE,
  DELIVERY_INSTRUCTIONS, SHIP_METHOD, SYS_DELIVERY_DATE, SYS_SHIPPING_DATE,
  SOP_SHIPPING_TERMS_CODE, MP_SHIPPING_CUSTOMER, MP_INVOICE_CUSTOMER,
- BROKER_CODE, LOCATION, SALES_ANALYSIS_GROUP, COST_CENTER)
+ BROKER_CODE, LOCATION, SALES_ANALYSIS_GROUP, COST_CENTER, EDI_ORDER)
 SELECT
        O.COMPANY_CODE,
        O.DIVISION,
@@ -776,7 +1016,8 @@ SELECT
        CA.LOCATION,
        CA.CUSTOMER_GROUP,
        CASE WHEN ISNULL(CC.COST_CENTER_ON_ORDER_TYPE, 'N') = 'Y'
-            THEN COALESCE(SOT.COST_CENTER, '') ELSE '' END
+            THEN COALESCE(SOT.COST_CENTER, '') ELSE '' END,
+       O.EDI_ORDER
 FROM #SO_ORDERS O
 JOIN #RUN_ORDERS RO
   ON RO.COMPANY_CODE = O.COMPANY_CODE AND RO.DIVISION = O.DIVISION AND RO.ORDER_NUMBER = O.ORDER_NUMBER
@@ -908,7 +1149,7 @@ SET @N = @@ROWCOUNT;
         IF @N <> @LINE_CNT THROW 50012, 'The sales order line detail was not created.', 1;
 
 -- ----------------------------------------------------------------------------
--- 9. Line quantities 
+-- 9. Line quantities - 1 row per SN line, 2 rows per SP / PN line (sales unit + second unit)
 -- ----------------------------------------------------------------------------
 INSERT INTO FIN.SALES_ORDER_LINE_QTYS
 (COMPANY_CODE, DIVISION, ORDER_NUMBER, ORDER_LINE_NUMBER, UNIT_OF_MEASURE,
@@ -917,15 +1158,19 @@ INSERT INTO FIN.SALES_ORDER_LINE_QTYS
  TEMP_QTY_RESERVED, QUANTITY_PROMISED, IC_QTY_TO_SHIP, IC_QTY_CLOSED)
 SELECT
        L.COMPANY_CODE, L.DIVISION, L.ORDER_NUMBER, L.LINE_NO,
-       L.UNIT_SALES, 'N', L.QUANTITY, L.QUANTITY,
+       Q.UOM, CASE L.CAT WHEN 'SP' THEN @APPROX_SP WHEN 'PN' THEN @APPROX_PN ELSE @APPROX_SN END,
+       Q.QTY, Q.QTY,
        0, 0, 0, 0, 0, 0, 0, 0, 0
 FROM #LINES L
-JOIN #RUN_LINES RL ON RL.ID = L.ID;
+JOIN #RUN_LINES RL ON RL.ID = L.ID
+CROSS APPLY (VALUES (1, L.UNIT_SALES, CAST(L.QUANTITY AS DECIMAL(28,10))),
+                    (2, L.U2_UOM,     L.U2_QTY)) Q (SEQ, UOM, QTY)
+WHERE Q.SEQ = 1 OR L.CAT <> 'SN';
 SET @N = @@ROWCOUNT;
-        IF @N < @LINE_CNT THROW 50013, 'The sales order line quantity was not created.', 1;
+        IF @N <> @QTY_CNT THROW 50013, 'The sales order line quantities were not created as expected (1 row per SN line, 2 per SP / PN line).', 1;
 
 -- ----------------------------------------------------------------------------
--- 10. Line detail quantities SELECT * FROM SALES_ORDER_LINE_DETAIL_QTYS
+-- 10. Line detail quantities - 1 row per SN line, 2 rows per SP / PN line
 -- ----------------------------------------------------------------------------
 INSERT INTO FIN.SALES_ORDER_LINE_DETAIL_QTYS
 (COMPANY_CODE, DIVISION, ORDER_NUMBER, ORDER_LINE_NUMBER, [SEQUENCE],
@@ -935,13 +1180,17 @@ INSERT INTO FIN.SALES_ORDER_LINE_DETAIL_QTYS
  ORDER_LINE_TYPE, IC_QTY_TO_SHIP, IC_QTY_CLOSED)
 SELECT
        L.COMPANY_CODE, L.DIVISION, L.ORDER_NUMBER, L.LINE_NO,
-       '001', L.UNIT_SALES, 'N', L.QUANTITY, L.QUANTITY,
+       '001', Q.UOM, CASE L.CAT WHEN 'SP' THEN @APPROX_SP WHEN 'PN' THEN @APPROX_PN ELSE @APPROX_SN END,
+       Q.QTY, Q.QTY,
        0, 0, 0, 0, 0, 0, L.WAREHOUSE, L.PART_CODE, L.SYS_DELIVERY_DATE,
        'S', 0, 0
 FROM #LINES L
-JOIN #RUN_LINES RL ON RL.ID = L.ID;
+JOIN #RUN_LINES RL ON RL.ID = L.ID
+CROSS APPLY (VALUES (1, L.UNIT_SALES, CAST(L.QUANTITY AS DECIMAL(28,10))),
+                    (2, L.U2_UOM,     L.U2_QTY)) Q (SEQ, UOM, QTY)
+WHERE Q.SEQ = 1 OR L.CAT <> 'SN';
 SET @N = @@ROWCOUNT;
-        IF @N < @LINE_CNT THROW 50014, 'The sales order line detail quantity was not created.', 1;
+        IF @N <> @QTY_CNT THROW 50014, 'The sales order line detail quantities were not created as expected (1 row per SN line, 2 per SP / PN line).', 1;
 
         IF @KIND IN ('B', 'O')
         BEGIN
@@ -1009,7 +1258,7 @@ SELECT @LoadedLines = COUNT(*), @LoadedOrders = COUNT(DISTINCT L.ORDER_NUMBER)
 FROM #LINES L JOIN FIN.KAS_SO_LOADS K ON K.ID = L.ID WHERE K.STATUS_FLAG = 'P';
 SELECT @FailedLines = COUNT(*) FROM #FAILED;
 
-PRINT CONCAT('LOAD_SO_SINGLE_NON_PACKAGED: loaded ', @LoadedOrders, ' order(s) / ', @LoadedLines,
+PRINT CONCAT('LOAD_SO_COMPLETE: loaded ', @LoadedOrders, ' order(s) / ', @LoadedLines,
              ' line(s); ', @FailedLines, ' line(s) marked F (see KAS_SO_LOADS.RS_MESSAGE_TEXT).');
 
 END TRY
@@ -1036,7 +1285,187 @@ BEGIN CATCH
         JOIN #KAS_VALID V ON V.ID = K.ID
         WHERE K.STATUS_FLAG = 'V';
 
-    PRINT CONCAT('LOAD_SO_SINGLE_NON_PACKAGED: unexpected error, run stopped and unloaded lines marked F: ', @FATAL);
+    PRINT CONCAT('LOAD_SO_COMPLETE: unexpected error, run stopped and unloaded lines marked F: ', @FATAL);
+END CATCH
+
+-- ============================================================================
+-- 7. EXPORT DETAILS / EXPORT NOTES  (FIN.KAS_SO_EXPORT_LOADS ->
+--      FIN.SOP_ORDER_HEADER_EXP_DETAILS + FIN.SALES_ORDER_EXPORT_NOTES)
+--
+--    NO VALIDATION HERE: every business check is in VALIDATION_SO_LOAD.sql (rules E1-E7).
+--    This section only loads rows that validation marked STATUS_FLAG = 'V' / 'Validated'.
+--    Run it after the sales orders exist (same script run is fine: orders loaded above are visible).
+--
+--    Record by record: every staging row is its own transaction.
+--      * SOP_ORDER_HEADER_EXP_DETAILS - ONE row per order, written by the first row of the order.
+--        SYS_TRANS_TERM_CODE, SYS_MOT_CODE, SYS_INCOTERM_CITY, SYS_EXPORT_EXIT_PORT and
+--        SYS_EXPORT_DEST_PORT: CSV value, else the default from CUSTOMER_ADDRESSES of the order's
+--        delivery address (what ADD_EXPORT_DETAILS copies). Everything else comes from the CSV.
+--      * SALES_ORDER_EXPORT_NOTES - MANY rows per order (key order + note type + note code).
+--        When the details row is created, the delivery address notes (CUSTOMER_ADDRESS_EXP_NOTES)
+--        are copied first (what INITIAL_ORDER_EXPORT_NOTES does; switch @X_COPY_ADDR_NOTES).
+--        Then the note of the CSV row is added; a note whose type + code already exists on the
+--        order updates its text. Blank text keeps the existing text, else takes the standard
+--        text of the code (SYS_EXPORT_NOTE_CODES), as the maintenance form does.
+--    A database error on any step ROLLS BACK that row (neither table keeps anything from it) and
+--    the staging row gets STATUS_FLAG = 'F', RS_MESSAGE_TEXT = 'Failed due to : <step>: <SQL error>'.
+--    Loaded rows get STATUS_FLAG = 'P', PROCESSED_DATE and 'Loaded export data for order number : <n>'.
+-- ============================================================================
+BEGIN TRY
+
+IF OBJECT_ID('tempdb..#EXP_ROWS') IS NOT NULL DROP TABLE #EXP_ROWS;
+
+DECLARE @X_COPY_ADDR_NOTES BIT = 1;   -- 1 = copy the delivery address export notes onto the order
+
+SELECT E.ID,
+       LTRIM(RTRIM(E.COMPANY_CODE)) AS COMPANY_CODE,
+       LTRIM(RTRIM(E.DIVISION))     AS DIVISION,
+       LTRIM(RTRIM(E.ORDER_NUMBER)) AS ORDER_NUMBER
+INTO #EXP_ROWS
+FROM FIN.KAS_SO_EXPORT_LOADS E
+WHERE E.STATUS_FLAG     = 'V'
+  AND E.RS_MESSAGE_TEXT = 'Validated';
+
+DECLARE @X_ID INT, @X_CO VARCHAR(10), @X_DIV VARCHAR(2), @X_ORD VARCHAR(9),
+        @X_STAGE VARCHAR(60), @X_ERR NVARCHAR(2000),
+        @X_NTYPE VARCHAR(50), @X_NCODE VARCHAR(50), @X_NTEXT VARCHAR(MAX),
+        @X_LOADED INT = 0, @X_FAILED INT = 0;
+
+WHILE 1 = 1
+BEGIN
+    SET @X_ID = NULL;
+    SELECT TOP (1) @X_ID = ID, @X_CO = COMPANY_CODE, @X_DIV = DIVISION, @X_ORD = ORDER_NUMBER
+    FROM #EXP_ROWS ORDER BY ID;
+    IF @X_ID IS NULL BREAK;
+    DELETE FROM #EXP_ROWS WHERE ID = @X_ID;
+
+    SET @X_STAGE = 'SOP_ORDER_HEADER_EXP_DETAILS';
+    SET @X_ERR = NULL;
+
+    BEGIN TRY
+        BEGIN TRANSACTION;
+
+        -- ---------------------------------------------------------------- header export details
+        -- one row per order: written by the first row of the order, later rows skip it
+        IF NOT EXISTS (SELECT 1 FROM FIN.SOP_ORDER_HEADER_EXP_DETAILS D
+                       WHERE D.COMPANY_CODE = @X_CO AND D.DIVISION = @X_DIV AND D.ORDER_NUMBER = @X_ORD)
+        BEGIN
+            INSERT INTO FIN.SOP_ORDER_HEADER_EXP_DETAILS
+            (COMPANY_CODE, DIVISION, ORDER_NUMBER, SYS_TRANS_TERM_CODE, SYS_NBR_OF_CONTAINERS,
+             SYS_CONTAINER_TYPE, SYS_CONTAINER_SIZE, SYS_MOT_CODE, SYS_INCOTERM_CODE, SYS_INCOTERM_CITY,
+             SYS_SIGNATORY_NAME, SYS_LC_NUMBER, SYS_CARRIER_ADVICE_NUMBER, SYS_INSPECTION_NUMBER,
+             SYS_SHIPPING_LINE, SYS_INSUR_CERT_NUMBER, SYS_CUSTOMS_REF_STATUS, SYS_EXPORT_EXIT_PORT,
+             SYS_EXPORT_DEST_PORT, SYS_EXPORT_ADDL_INFO_1, SYS_EXPORT_ADDL_INFO_2, SYS_FRT_FORWARDER_NBR,
+             SYS_BOOKING_NUMBER, SYS_VESSEL_NAME, SYS_VOYAGE_NUMBER, SYS_CONTAINER_NUMBER,
+             SYS_SAIL_DATE, SYS_RAIL_DATE, SYS_CUT_OFF_DATE, SYS_LAYCAN_FROM_DATE, SYS_LAYCAN_TO_DATE)
+            SELECT @X_CO, @X_DIV, @X_ORD,
+                   COALESCE(NULLIF(LTRIM(RTRIM(E.SYS_TRANS_TERM_CODE)), ''), CA.SYS_TRANS_TERM_CODE, ''),
+                   ISNULL(E.SYS_NBR_OF_CONTAINERS, 0),
+                   ISNULL(LTRIM(RTRIM(E.SYS_CONTAINER_TYPE)), ''),
+                   ISNULL(LTRIM(RTRIM(E.SYS_CONTAINER_SIZE)), ''),
+                   COALESCE(NULLIF(LTRIM(RTRIM(E.SYS_MOT_CODE)), ''), CA.SYS_MOT_CODE, ''),
+                   ISNULL(LTRIM(RTRIM(E.SYS_INCOTERM_CODE)), ''),
+                   COALESCE(NULLIF(LTRIM(RTRIM(E.SYS_INCOTERM_CITY)), ''), CA.SYS_INCOTERM_CITY, ''),
+                   ISNULL(LTRIM(RTRIM(E.SYS_SIGNATORY_NAME)), ''),
+                   ISNULL(E.SYS_LC_NUMBER, ''), ISNULL(E.SYS_CARRIER_ADVICE_NUMBER, ''),
+                   ISNULL(E.SYS_INSPECTION_NUMBER, ''),
+                   ISNULL(LTRIM(RTRIM(E.SYS_SHIPPING_LINE)), ''),
+                   ISNULL(E.SYS_INSUR_CERT_NUMBER, ''), ISNULL(E.SYS_CUSTOMS_REF_STATUS, ''),
+                   COALESCE(NULLIF(LTRIM(RTRIM(E.SYS_EXPORT_EXIT_PORT)), ''), CA.SYS_EXPORT_EXIT_PORT, ''),
+                   COALESCE(NULLIF(LTRIM(RTRIM(E.SYS_EXPORT_DEST_PORT)), ''), CA.SYS_EXPORT_DEST_PORT, ''),
+                   ISNULL(E.SYS_EXPORT_ADDL_INFO_1, ''), ISNULL(E.SYS_EXPORT_ADDL_INFO_2, ''),
+                   ISNULL(E.SYS_FRT_FORWARDER_NBR, ''), ISNULL(E.SYS_BOOKING_NUMBER, ''),
+                   ISNULL(E.SYS_VESSEL_NAME, ''), ISNULL(E.SYS_VOYAGE_NUMBER, ''),
+                   ISNULL(E.SYS_CONTAINER_NUMBER, ''),
+                   -- GEM stores an empty date as 1858-11-17 (see the existing export rows)
+                   ISNULL(E.SYS_SAIL_DATE, '18581117'), ISNULL(E.SYS_RAIL_DATE, '18581117'),
+                   ISNULL(E.SYS_CUT_OFF_DATE, '18581117'),
+                   ISNULL(E.SYS_LAYCAN_FROM_DATE, '18581117'), ISNULL(E.SYS_LAYCAN_TO_DATE, '18581117')
+            FROM FIN.KAS_SO_EXPORT_LOADS E
+            JOIN FIN.SALES_ORDER_HEADERS H
+              ON H.COMPANY_CODE = @X_CO AND H.DIVISION = @X_DIV AND H.ORDER_NUMBER = @X_ORD
+            JOIN FIN.CUSTOMER_ADDRESSES CA
+              ON CA.COMPANY_CODE = H.COMPANY_CODE AND CA.DIVISION = H.DIVISION
+             AND CA.CUSTOMER_NUMBER = H.CUSTOMER_NUMBER AND CA.ADDRESS_CODE = H.DELIVERY_ADDRESS_CODE
+            WHERE E.ID = @X_ID;
+            IF @@ROWCOUNT <> 1
+                THROW 50023, 'The export details row was not created (order or delivery address not found)', 1;
+
+            -- default export notes of the delivery address (INITIAL_ORDER_EXPORT_NOTES)
+            IF @X_COPY_ADDR_NOTES = 1
+            BEGIN
+                SET @X_STAGE = 'SALES_ORDER_EXPORT_NOTES (delivery address notes)';
+                INSERT INTO FIN.SALES_ORDER_EXPORT_NOTES
+                (COMPANY_CODE, DIVISION, ORDER_NUMBER, SYS_EXPORT_NOTE_TYPE, SYS_EXPORT_NOTE_CODE, SYS_EXPORT_NOTES)
+                SELECT @X_CO, @X_DIV, @X_ORD, N.SYS_EXPORT_NOTE_TYPE, N.SYS_EXPORT_NOTE_CODE, N.SYS_EXPORT_NOTES
+                FROM FIN.SALES_ORDER_HEADERS H
+                JOIN FIN.CUSTOMER_ADDRESS_EXP_NOTES N
+                  ON N.COMPANY_CODE = H.COMPANY_CODE AND N.DIVISION = H.DIVISION
+                 AND N.CUSTOMER_NUMBER = H.CUSTOMER_NUMBER AND N.ADDRESS_CODE = H.DELIVERY_ADDRESS_CODE
+                WHERE H.COMPANY_CODE = @X_CO AND H.DIVISION = @X_DIV AND H.ORDER_NUMBER = @X_ORD;
+            END
+        END
+
+        -- ---------------------------------------------------------------- the note of this row
+        SET @X_STAGE = 'SALES_ORDER_EXPORT_NOTES';
+        SELECT @X_NTYPE = LTRIM(RTRIM(ISNULL(E.SYS_EXPORT_NOTE_TYPE, ''))),
+               @X_NCODE = LTRIM(RTRIM(ISNULL(E.SYS_EXPORT_NOTE_CODE, ''))),
+               @X_NTEXT = NULLIF(LTRIM(RTRIM(ISNULL(E.SYS_EXPORT_NOTES, ''))), '')
+        FROM FIN.KAS_SO_EXPORT_LOADS E WHERE E.ID = @X_ID;
+
+        IF @X_NTYPE <> '' AND @X_NCODE <> ''
+        BEGIN
+            IF EXISTS (SELECT 1 FROM FIN.SALES_ORDER_EXPORT_NOTES N
+                       WHERE N.COMPANY_CODE = @X_CO AND N.DIVISION = @X_DIV AND N.ORDER_NUMBER = @X_ORD
+                         AND N.SYS_EXPORT_NOTE_TYPE = @X_NTYPE AND N.SYS_EXPORT_NOTE_CODE = @X_NCODE)
+            BEGIN
+                IF @X_NTEXT IS NOT NULL                       -- blank text keeps the existing text
+                    UPDATE FIN.SALES_ORDER_EXPORT_NOTES
+                    SET SYS_EXPORT_NOTES = @X_NTEXT
+                    WHERE COMPANY_CODE = @X_CO AND DIVISION = @X_DIV AND ORDER_NUMBER = @X_ORD
+                      AND SYS_EXPORT_NOTE_TYPE = @X_NTYPE AND SYS_EXPORT_NOTE_CODE = @X_NCODE;
+            END
+            ELSE
+            BEGIN
+                IF @X_NTEXT IS NULL                           -- standard text of the note code
+                    SELECT @X_NTEXT = C.SYS_EXPORT_NOTES
+                    FROM FIN.SYS_EXPORT_NOTE_CODES C WHERE C.SYS_EXPORT_NOTE_CODE = @X_NCODE;
+                INSERT INTO FIN.SALES_ORDER_EXPORT_NOTES
+                (COMPANY_CODE, DIVISION, ORDER_NUMBER, SYS_EXPORT_NOTE_TYPE, SYS_EXPORT_NOTE_CODE, SYS_EXPORT_NOTES)
+                VALUES (@X_CO, @X_DIV, @X_ORD, @X_NTYPE, @X_NCODE, ISNULL(@X_NTEXT, ''));
+            END
+        END
+
+        -- everything succeeded: mark the staging row and commit together
+        UPDATE FIN.KAS_SO_EXPORT_LOADS
+        SET STATUS_FLAG     = 'P',
+            PROCESSED_DATE  = GETDATE(),
+            RS_MESSAGE_TEXT = CONCAT('Loaded export data for order number : ', @X_ORD)
+        WHERE ID = @X_ID;
+
+        COMMIT TRANSACTION;
+        SET @X_LOADED += 1;
+    END TRY
+    BEGIN CATCH
+        SET @X_ERR = ERROR_MESSAGE();
+        IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;      -- nothing from this row survives
+
+        UPDATE FIN.KAS_SO_EXPORT_LOADS                 -- recorded AFTER the rollback so it is kept
+        SET STATUS_FLAG     = 'F',
+            RS_MESSAGE_TEXT = LEFT(CONCAT('Failed due to : ', @X_STAGE, ': ', ISNULL(@X_ERR, 'unknown error')), 500)
+        WHERE ID = @X_ID;
+        SET @X_FAILED += 1;
+    END CATCH
+END
+
+PRINT CONCAT('LOAD_SO_COMPLETE (export): ', @X_LOADED, ' staging row(s) loaded, ',
+             @X_FAILED, ' marked F (see KAS_SO_EXPORT_LOADS.RS_MESSAGE_TEXT).');
+
+END TRY
+BEGIN CATCH
+    DECLARE @X_FATAL NVARCHAR(2000) = ERROR_MESSAGE();
+    IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;
+    PRINT CONCAT('LOAD_SO_COMPLETE (export): unexpected error, export load stopped: ', @X_FATAL);
 END CATCH
 
 EXEC sys.sp_releaseapplock @Resource = N'KAS_SO_LOADS_PIPELINE', @LockOwner = 'Session';

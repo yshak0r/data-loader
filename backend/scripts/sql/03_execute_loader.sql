@@ -16,6 +16,10 @@
      - any failure -> ROLLBACK of that record only -> 'F' / 'Failed to populate due to: ...'
    Records are processed one at a time, so a failure never touches other records.
 
+   HISTORY (INV_TRANSACTIONS / INV_TRANSACTION_LINES) is written inside the same per-record loop, right AFTER the
+   inventory record is committed as 'P', in its own small transaction + TRY/CATCH. A history failure never rolls back
+   the inventory load and never changes the record's 'P' status; it is only reported in the tracker history columns.
+
    This is ONE batch on purpose (no GO): variables and the table variable that
    survives ROLLBACK must live across the whole run.
    ========================================================================== */
@@ -54,6 +58,9 @@ DECLARE @Q_LINE_TYPE       VARCHAR(10) = 'R';
 DECLARE @Q_RECORD_TYPE     VARCHAR(10) = 'R';
 DECLARE @Q_ADJ_TYPE        VARCHAR(10) = 'R';
 DECLARE @Q_ALL_WAREHOUSES  VARCHAR(50) = '**';
+-- Status code of the on-hand (QOH) inventory status. IC_PRODUCT_STATUS must ALWAYS hold a QOH row for every
+-- part/warehouse/UOM that has a row in another status (QC, QR, ...), because a status transfer locks the QOH row.
+DECLARE @Q_QOH_STATUS    VARCHAR(10) = 'QOH';
 
 DECLARE @Q_COMPANY_CODE  VARCHAR(50);
 DECLARE @Q_STATUS_CODE   VARCHAR(10);
@@ -74,6 +81,12 @@ DECLARE @Q_NEW_LINE      BIT;
 DECLARE @Q_ORIG_DOC_NBR  VARCHAR(30);          -- ORIGINAL_DOCUMENT_NUMBER (same value in header, plate line, plate line detail)
 DECLARE @Q_ORIG_DOC_LINE VARCHAR(30);          -- ORIGINAL_DOCUMENT_LINE
 DECLARE @Q_ORIG_DOC_SEQ  INT = 0;              -- ORIGINAL_DOCUMENT_SEQUENCE
+-- the header (IC_QUALITY_DOCS) is ONE row per doc, so it cannot hold a per-line value: it gets the doc's first line
+DECLARE @Q_HDR_DOC_LINE  VARCHAR(30);
+DECLARE @Q_PLATE_ID      VARCHAR(30);
+DECLARE @Q_MOVE          VARCHAR(20);
+DECLARE @Q_ODL           INT;
+DECLARE @Q_DOC_REF       VARCHAR(30);   -- DC_LICENSE_PLATE_LINES.DOC_REFERENCE (movement code transaction number)
 -- FIX 2: tolerance for quantity comparisons (rounding to the column scale)
 DECLARE @QtyTol          DECIMAL(28,10) = 0.0001;
 
@@ -135,7 +148,19 @@ ALTER TABLE #LOAD_TRACK ADD
     ERROR_NUMBER     INT           NULL,
     ERROR_LINE       INT           NULL,
     ERROR_MESSAGE    NVARCHAR(4000) NULL,
-    PROCESSED_AT     DATETIME2     NULL;
+    PROCESSED_AT     DATETIME2     NULL,
+    -- history tables (written after the inventory record is committed; never affect FINAL_STATUS)
+    -- NOT_REQUIRED = inventory record did not load; SUCCESS = row inserted; EXISTS = row already there
+    -- (normal for a header shared by several records); FAILED / ROLLED_BACK / NOT_ATTEMPTED as for the inventory tables
+    INV_TRANSACTIONS      VARCHAR(15)    NOT NULL DEFAULT 'NOT_REQUIRED',
+    INV_TRANSACTION_LINES VARCHAR(15)    NOT NULL DEFAULT 'NOT_REQUIRED',
+    INV_TRANSACTION_DETAILS VARCHAR(15)    NOT NULL DEFAULT 'NOT_REQUIRED',
+    IC_MOVEMENTS          VARCHAR(15)    NOT NULL DEFAULT 'NOT_REQUIRED',
+    DC_LICENSE_PLATE_HISTORY VARCHAR(15)    NOT NULL DEFAULT 'NOT_REQUIRED',
+    IC_LOT_TRACE           VARCHAR(15)    NOT NULL DEFAULT 'NOT_REQUIRED',
+    HIST_ERROR_NUMBER     INT            NULL,
+    HIST_ERROR_LINE       INT            NULL,
+    HIST_ERROR_MESSAGE    NVARCHAR(4000) NULL;
 
 INSERT INTO #LOAD_TRACK
     (GEM_DBKEY, COMPANY_CODE, DC_LICENSE_PLATE_ID, DC_LICENSE_PLATE_LINE, WAREHOUSE,
@@ -188,6 +213,16 @@ SET FINAL_STATUS  = 'F',
     PROCESSED_AT  = SYSDATETIME()
 WHERE PRODUCT_CATEGORY IS NULL;
 
+-- ---------------------------------------------------------------------------
+-- 2b. TRANSACTION NUMBERS are taken RECORD BY RECORD inside the record's own transaction (start of section 4),
+--     so a failed record rolls its number back with it.
+--       QC / CQC / QR : BGNQC / BGNQR -> DC_LICENSE_PLATE_LINES.DOC_REFERENCE = ORIGINAL_DOCUMENT_NUMBER, plus the line
+--       QOH (other)   : BGNQOH        -> DC_LICENSE_PLATE_LINES.DOC_REFERENCE only
+--     @OrigDocScope = 'LPN'    one transaction number per LPN and movement code; its lines are numbered 1..n   (default)
+--                   = 'RECORD' every record gets its own transaction number, line always 1
+-- ---------------------------------------------------------------------------
+DECLARE @OrigDocScope VARCHAR(10) = 'LPN';
+
 UPDATE K
 SET K.STATUS_FLAG     = 'F',
     K.RS_MESSAGE_TEXT = LEFT('Failed to populate due to: ' + T.ERROR_MESSAGE, @MsgMax)
@@ -201,6 +236,7 @@ WHERE T.FINAL_STATUS = 'F' AND K.STATUS_FLAG = 'V';
 IF OBJECT_ID('tempdb..#R')         IS NOT NULL DROP TABLE #R;
 IF OBJECT_ID('tempdb..#RU')        IS NOT NULL DROP TABLE #RU;
 IF OBJECT_ID('tempdb..#QDOC_MAP')  IS NOT NULL DROP TABLE #QDOC_MAP;
+IF OBJECT_ID('tempdb..#ODN_MAP')   IS NOT NULL DROP TABLE #ODN_MAP;
 IF OBJECT_ID('tempdb..#QLINE_MAP') IS NOT NULL DROP TABLE #QLINE_MAP;
 IF OBJECT_ID('tempdb..#RUN_BATCH') IS NOT NULL DROP TABLE #RUN_BATCH;
 IF OBJECT_ID('tempdb..#RUN_ROWS')  IS NOT NULL DROP TABLE #RUN_ROWS;
@@ -215,13 +251,17 @@ SELECT TOP (0)
        K.QTY_1, K.UOM_1, K.QTY_2, K.UOM_2, K.UNIT_COST, K.BATCH_DATE, K.BEST_BEFORE_DATE, K.CREATION_DATE
 INTO #R
 FROM KAS_DC_LOADS K;
-ALTER TABLE #R ADD CAT VARCHAR(2) NULL, IC_RETEST_DAYS INT NULL, DIVISION VARCHAR(100) NULL,
+ALTER TABLE #R ADD ORIGINAL_DOCUMENT_NUMBER VARCHAR(30) NULL, ORIGINAL_DOCUMENT_LINE VARCHAR(30) NULL,
+                   CAT VARCHAR(2) NULL, IC_RETEST_DAYS INT NULL, DIVISION VARCHAR(100) NULL,
                    INV_UOM VARCHAR(50) NULL, INV_QTY DECIMAL(28,10) NULL, CONV_MATCHES INT NULL;
 
 -- #RU : unit-of-measure rows of the current record (what feeds the three inventory-status tables)
 CREATE TABLE #RU (UOM VARCHAR(50) NOT NULL, UOM_TYPE VARCHAR(10) NOT NULL, QTY DECIMAL(28,10) NULL);
 
 -- Quality-doc bookkeeping (temp-table changes are rolled back together with the record)
+-- transaction number already taken in this run for an LPN, and the last line used under it
+CREATE TABLE #ODN_MAP (COMPANY_CODE VARCHAR(50) NOT NULL, MOVEMENT_CODE VARCHAR(20) NOT NULL,
+                       DC_LICENSE_PLATE_ID VARCHAR(30) NOT NULL, TRANS_NBR VARCHAR(30) NOT NULL, LAST_LINE INT NOT NULL);
 CREATE TABLE #QDOC_MAP  (COMPANY_CODE VARCHAR(50) NOT NULL, PART_CODE VARCHAR(100) NOT NULL,
                          IC_LOT_NUMBER VARCHAR(100) NOT NULL, IC_STATUS_CODE VARCHAR(10) NOT NULL,
                          QUALITY_DOC_NBR VARCHAR(100) NOT NULL);
@@ -242,6 +282,26 @@ CREATE TABLE #PS_BEFORE (UOM VARCHAR(50) NOT NULL, UOM_TYPE VARCHAR(10) NOT NULL
 CREATE TABLE #BL_BEFORE (TBL SYSNAME NOT NULL, UOM VARCHAR(50) NOT NULL, UOM_TYPE VARCHAR(10) NOT NULL,
                          OLD_QTY DECIMAL(28,10) NULL, REC_QTY DECIMAL(28,10) NOT NULL);
 
+-- History variables (INV_TRANSACTIONS / INV_TRANSACTION_LINES /INV_TRANSACTION_DETAILS /IC_MOVEMENTS /DC_LICENSE_PLATE_HISTORY, /IC_LOT_TRACE, written per record after the inventory commit)
+DECLARE @HNo        VARCHAR(1)   = 'N';                -- ROSS #NO (STATUS_FLAG of a new transaction)
+DECLARE @HUser      VARCHAR(100) = SUSER_SNAME();
+-- Transfer cost constants (ROSS IC_L_GET_TRANSFER_COST uses PARAMETER("LANGUAGE_YES") and PARAMETER("TRANSFER_COST_METHOD_*")).
+-- Method/YES values confirmed from the ROSS parameter table. @HTcActive (STATUS_ACTIVE) still needs confirming.
+DECLARE @HTcYes         VARCHAR(10) = 'Y';   -- LANGUAGE_YES
+DECLARE @HTcFixed       VARCHAR(10) = '3';   -- TRANSFER_COST_METHOD_FIXED
+DECLARE @HTcIncremental VARCHAR(10) = '1';   -- TRANSFER_COST_METHOD_INCREMENT
+DECLARE @HTcMultiplier  VARCHAR(10) = '2';   -- TRANSFER_COST_METHOD_MULTIPLY
+DECLARE @HTcActive      VARCHAR(10) = 'A';   -- PARAMETER("STATUS_ACTIVE") for PRODUCT_WAREHOUSE.ACTIVATION_STATUS
+DECLARE @HNow       DATETIME;
+DECLARE @HToday     DATETIME;
+DECLARE @HStep      SYSNAME;
+DECLARE @HHdrRows   INT, @HLineRows INT, @HFound INT;
+DECLARE @HErrNum    INT, @HErrLine INT, @HErrMsg NVARCHAR(4000);
+DECLARE @HDetails   INT;  
+DECLARE @HICMovements  INT;      
+DECLARE @HDCLicensePlateHistory INT;       
+DECLARE @HLotTrace INT;      
+
 -- ---------------------------------------------------------------------------
 -- 4. Process ONE SOURCE RECORD AT A TIME
 -- ---------------------------------------------------------------------------
@@ -260,11 +320,13 @@ BEGIN
     INSERT INTO #R
         (GEM_DBKEY, COMPANY_CODE, WAREHOUSE, BIN_LOCATION, DC_LICENSE_PLATE_ID, DC_LICENSE_PLATE_LINE,
          DC_PARENT_LICENSE_PLATE_ID, PART_CODE, IC_LOT_NUMBER, IC_STATUS_CODE, QTY_1, UOM_1, QTY_2, UOM_2,
-         UNIT_COST, BATCH_DATE, BEST_BEFORE_DATE, CREATION_DATE, CAT, IC_RETEST_DAYS, DIVISION)
+         UNIT_COST, BATCH_DATE, BEST_BEFORE_DATE, CREATION_DATE, ORIGINAL_DOCUMENT_NUMBER, ORIGINAL_DOCUMENT_LINE,
+         CAT, IC_RETEST_DAYS, DIVISION)
     SELECT K.GEM_DBKEY, K.COMPANY_CODE, K.WAREHOUSE, ISNULL(K.BIN_LOCATION,''), K.DC_LICENSE_PLATE_ID,
            K.DC_LICENSE_PLATE_LINE, ISNULL(K.DC_PARENT_LICENSE_PLATE_ID,''), K.PART_CODE,
            ISNULL(K.IC_LOT_NUMBER,''), K.IC_STATUS_CODE, K.QTY_1, K.UOM_1, K.QTY_2, K.UOM_2,
            K.UNIT_COST, K.BATCH_DATE, K.BEST_BEFORE_DATE, K.CREATION_DATE,
+           K.ORIGINAL_DOCUMENT_NUMBER, K.ORIGINAL_DOCUMENT_LINE,
            T.PRODUCT_CATEGORY, PM.IC_RETEST_DAYS, WC.DIVISION
     FROM #LOAD_TRACK T
     JOIN KAS_DC_LOADS K        ON K.GEM_DBKEY = T.GEM_DBKEY
@@ -282,6 +344,8 @@ BEGIN
     SET @Q_DOC_NBR = NULL;
     SET @Q_ORIG_DOC_NBR = NULL;
     SET @Q_ORIG_DOC_LINE = NULL;
+    SET @Q_HDR_DOC_LINE = NULL;
+    SET @Q_DOC_REF = NULL;
 
     BEGIN TRY
         -- 4b. record preparation (conversions) - outside the transaction, but inside TRY
@@ -360,6 +424,82 @@ BEGIN
         -- ================= TRANSACTION FOR THIS SOURCE RECORD =================
         BEGIN TRANSACTION;
 
+        -- ---- TRANSACTION NUMBER (movement code) ------------------------------
+        -- Every record takes its transaction number from INVENTORY_MOVEMENTS_CONTROL (read, then +1, like ROSS):
+        --   QC / CQC / QR records : BGNQC / BGNQR  -> the number is DOC_REFERENCE and also ORIGINAL_DOCUMENT_NUMBER,
+        --                           the line under it is ORIGINAL_DOCUMENT_LINE
+        --   all other (QOH) records: BGNQOH        -> the number is DOC_REFERENCE only (no original document)
+        -- Done inside the record's transaction: if the record fails, the counter, the number and the line roll back with it.
+        SET @Step = N'TRANSACTION NUMBER';
+        SELECT @Q_COMPANY_CODE = CONVERT(VARCHAR(50), COMPANY_CODE),
+               @Q_STATUS_CODE  = CONVERT(VARCHAR(10), IC_STATUS_CODE),
+               @Q_PLATE_ID     = CONVERT(VARCHAR(30), DC_LICENSE_PLATE_ID)
+        FROM #R;
+
+        SET @Q_MOVE = CASE WHEN @NeedQuality = 0 THEN 'BGNQOH'
+                           WHEN UPPER(LTRIM(RTRIM(@Q_STATUS_CODE))) = 'QR' THEN 'BGNQR'
+                           ELSE 'BGNQC' END;
+        SET @Q_ORIG_DOC_NBR = NULL;
+        SET @Q_ODL = NULL;
+
+        -- same LPN already numbered in this run (same movement code) -> same transaction number, next line under it
+        IF @OrigDocScope = 'LPN'
+            SELECT @Q_ORIG_DOC_NBR = TRANS_NBR, @Q_ODL = LAST_LINE + 1
+            FROM #ODN_MAP
+            WHERE COMPANY_CODE = @Q_COMPANY_CODE AND MOVEMENT_CODE = @Q_MOVE AND DC_LICENSE_PLATE_ID = @Q_PLATE_ID;
+
+        IF @Q_ORIG_DOC_NBR IS NULL
+        BEGIN
+            SET @Q_COUNTER = NULL; SET @Q_MANUAL_FLAG = NULL;
+            SELECT @Q_COUNTER = TRY_CONVERT(BIGINT, TRANSACTION_NUMBER),
+                   @Q_MANUAL_FLAG = UPPER(LTRIM(RTRIM(CONVERT(VARCHAR(20), MANUAL_NUMBER))))
+            FROM INVENTORY_MOVEMENTS_CONTROL WITH (UPDLOCK, HOLDLOCK)
+            WHERE COMPANY_CODE = @Q_COMPANY_CODE AND MOVEMENT_CODE = @Q_MOVE;
+
+            IF @@ROWCOUNT <> 1
+                THROW 51060, 'Expected exactly one INVENTORY_MOVEMENTS_CONTROL row for this company and movement code (BGNQOH / BGNQC / BGNQR). Run the preliminary query first.', 1;
+            IF @Q_COUNTER IS NULL
+                THROW 51061, 'INVENTORY_MOVEMENTS_CONTROL.TRANSACTION_NUMBER is not a valid integer.', 1;
+            IF @Q_MANUAL_FLAG IS NULL OR @Q_MANUAL_FLAG NOT IN ('N', 'NO', '0', 'FALSE', '#NO')
+                THROW 51062, 'The movement code is manually numbered (or MANUAL_NUMBER is unrecognized). Automatic numbering was stopped.', 1;
+
+            UPDATE INVENTORY_MOVEMENTS_CONTROL
+            SET TRANSACTION_NUMBER = @Q_COUNTER + 1
+            WHERE COMPANY_CODE = @Q_COMPANY_CODE AND MOVEMENT_CODE = @Q_MOVE;
+            IF @@ROWCOUNT <> 1
+                THROW 51063, 'Failed to increment exactly one INVENTORY_MOVEMENTS_CONTROL counter row.', 1;
+
+            SET @Q_ORIG_DOC_NBR = CONVERT(VARCHAR(30), @Q_COUNTER);
+            SET @Q_ODL = 1;
+            INSERT INTO #ODN_MAP (COMPANY_CODE, MOVEMENT_CODE, DC_LICENSE_PLATE_ID, TRANS_NBR, LAST_LINE)
+            VALUES (@Q_COMPANY_CODE, @Q_MOVE, @Q_PLATE_ID, @Q_ORIG_DOC_NBR, 1);
+        END
+        ELSE
+            UPDATE #ODN_MAP SET LAST_LINE = @Q_ODL
+            WHERE COMPANY_CODE = @Q_COMPANY_CODE AND MOVEMENT_CODE = @Q_MOVE AND DC_LICENSE_PLATE_ID = @Q_PLATE_ID;
+
+        SET @Q_DOC_REF = @Q_ORIG_DOC_NBR;           -- DC_LICENSE_PLATE_LINES.DOC_REFERENCE, all records
+
+        IF @NeedQuality = 1
+        BEGIN
+            SET @Q_ORIG_DOC_LINE = CONVERT(VARCHAR(30), @Q_ODL);
+            SET @Q_HDR_DOC_LINE  = @Q_ORIG_DOC_LINE;   -- header, plate line, plate line detail: same transaction number / line
+            SET @Q_ORIG_DOC_SEQ  = 0;
+
+            -- store them on the staging record (rolled back with the record if it fails)
+            UPDATE K
+            SET K.ORIGINAL_DOCUMENT_NUMBER = @Q_ORIG_DOC_NBR, K.ORIGINAL_DOCUMENT_LINE = @Q_ORIG_DOC_LINE
+            FROM KAS_DC_LOADS K JOIN #R r ON r.GEM_DBKEY = K.GEM_DBKEY;
+            IF @@ROWCOUNT <> 1
+                THROW 51033, 'Could not store ORIGINAL_DOCUMENT_NUMBER / ORIGINAL_DOCUMENT_LINE on KAS_DC_LOADS for this record.', 1;
+        END
+        ELSE
+        BEGIN
+            -- no original document for non-quality (QOH) records
+            SET @Q_ORIG_DOC_NBR = NULL;
+            SET @Q_ORIG_DOC_LINE = NULL;
+        END;
+
         -- ---- DC_LICENSE_PLATE_LINES ------------------------------------------
         SET @Step = N'DC_LICENSE_PLATE_LINES';
         IF EXISTS (SELECT 1 FROM DC_LICENSE_PLATE_LINES T JOIN #R r
@@ -431,8 +571,8 @@ SELECT
     ISNULL(s.UOM_1, '') AS UOM_1,
     ISNULL(s.QTY_2, 0) AS QUANTITY_2,
     ISNULL(s.UOM_2, '') AS UOM_2,
-    '' AS DOC_REFERENCE,
-    1 AS DOC_LINE,
+    ISNULL(@Q_DOC_REF, '') AS DOC_REFERENCE,
+    ISNULL(@Q_ODL, 1) AS DOC_LINE,   -- transaction line under DOC_REFERENCE (= ORIGINAL_DOCUMENT_LINE for QC/CQC/QR)
     0 AS PHYS_COUNT_NUMBER,
     0 AS COUNT_SEQ_NUMBER,
     0.0000 AS DC_TARE_WEIGHT_1,
@@ -657,6 +797,20 @@ SELECT
                           WHERE T.COMPANY_CODE = r.COMPANY_CODE AND T.WAREHOUSE = r.WAREHOUSE
                             AND T.PART_CODE = r.PART_CODE AND T.IC_STATUS_CODE = r.IC_STATUS_CODE
                             AND T.UNIT_OF_MEASURE = X.UOM AND T.IC_PRODUCT_UOM_TYPE = X.UOM_TYPE);
+        -- 4) QOH ANCHOR ROW: a record that is NOT in QOH status (QC / QR / CQC / ...) must still leave a QOH row on
+        --    IC_PRODUCT_STATUS for the same company/warehouse/part/UOM/UOM type, with quantity 0, otherwise the later
+        --    QC/QR -> QOH transfer cannot lock the QOH row (P_90435). An existing QOH row is left exactly as it is
+        --    (its quantity belongs to QOH records / earlier loads); only missing keys are inserted, at 0.
+        IF UPPER(LTRIM(RTRIM((SELECT TOP (1) IC_STATUS_CODE FROM #R)))) <> UPPER(@Q_QOH_STATUS)
+            INSERT INTO IC_PRODUCT_STATUS
+            (COMPANY_CODE, WAREHOUSE, PART_CODE, IC_STATUS_CODE, UNIT_OF_MEASURE, IC_PRODUCT_UOM_TYPE, IC_QUANTITY,
+             IC_QTY_PICKED, IC_QTY_IN_DESPATCH, IC_QTY_RESERVED, IC_QTY_AWAITING_CONFIRM_OUT)
+            SELECT r.COMPANY_CODE, r.WAREHOUSE, r.PART_CODE, @Q_QOH_STATUS, X.UOM, X.UOM_TYPE, 0, 0, 0, 0, 0
+            FROM #R r CROSS JOIN #RU X
+            WHERE NOT EXISTS (SELECT 1 FROM IC_PRODUCT_STATUS T
+                              WHERE T.COMPANY_CODE = r.COMPANY_CODE AND T.WAREHOUSE = r.WAREHOUSE
+                                AND T.PART_CODE = r.PART_CODE AND T.IC_STATUS_CODE = @Q_QOH_STATUS
+                                AND T.UNIT_OF_MEASURE = X.UOM AND T.IC_PRODUCT_UOM_TYPE = X.UOM_TYPE);
         -- (no #RUN_ROWS bookkeeping for this table any more; the quantity check is in the final validation)
         INSERT INTO @Steps (TBL) VALUES (N'IC_PRODUCT_STATUS');
 
@@ -797,14 +951,20 @@ SELECT
             SELECT @Q_COMPANY_CODE = CONVERT(VARCHAR(50), COMPANY_CODE),
                    @Q_STATUS_CODE  = CONVERT(VARCHAR(10), IC_STATUS_CODE),
                    @Q_PART_CODE    = CONVERT(VARCHAR(100), PART_CODE),
-                   @Q_LOT_NUMBER   = CONVERT(VARCHAR(100), IC_LOT_NUMBER)
+                   @Q_LOT_NUMBER   = CONVERT(VARCHAR(100), IC_LOT_NUMBER),
+                   @Q_PLATE_ID     = CONVERT(VARCHAR(30), DC_LICENSE_PLATE_ID)
             FROM #R;
 
-            -- one quality doc per company + part + lot + status (re-used by later records of the same combination)
-            SELECT @Q_DOC_NBR = QUALITY_DOC_NBR FROM #QDOC_MAP
-            WHERE COMPANY_CODE = @Q_COMPANY_CODE AND PART_CODE = @Q_PART_CODE
-              AND IC_LOT_NUMBER = @Q_LOT_NUMBER AND IC_STATUS_CODE = @Q_STATUS_CODE;
-            SET @Q_NEW_DOC = CASE WHEN @Q_DOC_NBR IS NULL THEN 1 ELSE 0 END;
+            -- ORIGINAL_DOCUMENT_NUMBER / LINE were assigned at the start of this record's transaction (step "TRANSACTION NUMBER")
+            IF @Q_ORIG_DOC_NBR IS NULL OR @Q_ORIG_DOC_LINE IS NULL
+                THROW 51033, 'ORIGINAL_DOCUMENT_NUMBER / ORIGINAL_DOCUMENT_LINE were not assigned for this record.', 1;
+            SET @Q_HDR_DOC_LINE = @Q_ORIG_DOC_LINE;   -- header, plate line, plate line detail: same transaction number / line
+            SET @Q_ORIG_DOC_SEQ = 0;
+
+            -- ROSS way: every LPN line gets its OWN quality doc (QUALITY_DOC_NBR) with one quality doc line, so
+            -- IC_QUALITY_DOCS / IC_QUALITY_DOC_LINES map 1 : 1 to DC_LICENSE_PLATE_LINES / _LINE_DETAILS.
+            SET @Q_DOC_NBR = NULL;
+            SET @Q_NEW_DOC = 1;
 
             IF @Q_NEW_DOC = 1
             BEGIN
@@ -859,32 +1019,13 @@ SELECT
                 VALUES (@Q_COMPANY_CODE, @Q_PART_CODE, @Q_LOT_NUMBER, @Q_STATUS_CODE, @Q_DOC_NBR);
             END;
 
-            -- one doc line per quality doc + warehouse + bin
-            SET @Q_LINE_NBR = NULL;
-            SELECT @Q_LINE_NBR = M.QUALITY_DOC_LINE_NBR
-            FROM #QLINE_MAP M JOIN #R r
-              ON r.COMPANY_CODE = M.COMPANY_CODE AND r.WAREHOUSE = M.WAREHOUSE
-             AND ISNULL(r.BIN_LOCATION,'') = ISNULL(M.BIN_LOCATION,'')
-            WHERE M.QUALITY_DOC_NBR = @Q_DOC_NBR;
-            SET @Q_NEW_LINE = CASE WHEN @Q_LINE_NBR IS NULL THEN 1 ELSE 0 END;
+            -- one quality doc line (line 1) per quality doc: this record's own warehouse + bin
+            SET @Q_LINE_NBR  = 1;
+            SET @Q_NEW_LINE  = 1;
+            SET @Q_FIRST_LINE = 1;
+            INSERT INTO #QLINE_MAP (COMPANY_CODE, QUALITY_DOC_NBR, WAREHOUSE, BIN_LOCATION, QUALITY_DOC_LINE_NBR)
+            SELECT r.COMPANY_CODE, @Q_DOC_NBR, r.WAREHOUSE, r.BIN_LOCATION, @Q_LINE_NBR FROM #R r;
 
-            IF @Q_NEW_LINE = 1
-            BEGIN
-                SELECT @Q_LINE_NBR = ISNULL(MAX(QUALITY_DOC_LINE_NBR), 0) + 1
-                FROM #QLINE_MAP WHERE COMPANY_CODE = @Q_COMPANY_CODE AND QUALITY_DOC_NBR = @Q_DOC_NBR;
-                INSERT INTO #QLINE_MAP (COMPANY_CODE, QUALITY_DOC_NBR, WAREHOUSE, BIN_LOCATION, QUALITY_DOC_LINE_NBR)
-                SELECT r.COMPANY_CODE, @Q_DOC_NBR, r.WAREHOUSE, r.BIN_LOCATION, @Q_LINE_NBR FROM #R r;
-            END;
-            SELECT @Q_FIRST_LINE = MIN(QUALITY_DOC_LINE_NBR) FROM #QLINE_MAP
-            WHERE COMPANY_CODE = @Q_COMPANY_CODE AND QUALITY_DOC_NBR = @Q_DOC_NBR;
-
-            -- FIX 1: the ONE place where the original-document reference is derived. The header is one row per
-            -- quality doc, so the value is per DOC (not per bin line); the plate line, the plate line detail and
-            -- the header all take exactly these three variables.
-            -- the @Q_ORIG_DOC_LINE line below if the application uses a different value (e.g. '0').
-            SET @Q_ORIG_DOC_NBR  = SUBSTRING(CAST(@Q_DOC_NBR AS VARCHAR(100)), LEN(@Q_SOURCE_MODULE) + 1, 30);
-            SET @Q_ORIG_DOC_LINE = CONVERT(VARCHAR(30), @Q_FIRST_LINE);
-            SET @Q_ORIG_DOC_SEQ  = 0;
 
             IF EXISTS (SELECT 1 FROM #R WHERE NULLIF(LTRIM(RTRIM(DIVISION)), '') IS NULL)
                 THROW 51032, 'DIVISION is blank or missing in WAREHOUSE_CONTROLS for this warehouse.', 1;
@@ -929,10 +1070,10 @@ SELECT
                        '', '', GETDATE()
                 FROM #R r;
 
-            -- header reference = the same three variables the plate line and plate line detail received
+            -- header reference = the same pre-populated number / line / sequence the plate tables receive
             UPDATE QD
             SET QD.ORIGINAL_DOCUMENT_NUMBER   = @Q_ORIG_DOC_NBR,
-                QD.ORIGINAL_DOCUMENT_LINE     = @Q_ORIG_DOC_LINE,
+                QD.ORIGINAL_DOCUMENT_LINE     = @Q_HDR_DOC_LINE,
                 QD.ORIGINAL_DOCUMENT_SEQUENCE = @Q_ORIG_DOC_SEQ
             FROM IC_QUALITY_DOCS QD
             WHERE QD.COMPANY_CODE = @Q_COMPANY_CODE
@@ -940,7 +1081,7 @@ SELECT
               AND QD.IC_STATUS_CODE = @Q_STATUS_CODE;
             INSERT INTO @Steps (TBL) VALUES (N'IC_QUALITY_DOCS');
 
-            -- ---- IC_QUALITY_DOC_LINES (new line, or add to the existing warehouse+bin line) ----
+            -- ---- IC_QUALITY_DOC_LINES (new line, or add to the lot's existing line) ----
             SET @Step = N'IC_QUALITY_DOC_LINES';
             IF @Q_NEW_LINE = 1
                 INSERT INTO IC_QUALITY_DOC_LINES
@@ -1025,7 +1166,16 @@ SELECT
                          AND T.IC_STATUS_CODE = r.IC_STATUS_CODE
                          AND T.UNIT_OF_MEASURE = B.UOM AND T.IC_PRODUCT_UOM_TYPE = B.UOM_TYPE
                    WHERE T.IC_QUANTITY IS NULL
-                      OR ABS(T.IC_QUANTITY - (ISNULL(B.OLD_QTY, 0) + B.REC_QTY)) > @QtyTol) THEN 1 ELSE 0 END
+                      OR ABS(T.IC_QUANTITY - (ISNULL(B.OLD_QTY, 0) + B.REC_QTY)) > @QtyTol)
+                   -- a record that is not QOH must have left a QOH row (qty untouched, 0 if new) for every UOM row
+                   AND NOT EXISTS (
+                   SELECT 1 FROM #R r3 CROSS JOIN #RU X3
+                   WHERE UPPER(LTRIM(RTRIM(r3.IC_STATUS_CODE))) <> UPPER(@Q_QOH_STATUS)
+                     AND NOT EXISTS (SELECT 1 FROM IC_PRODUCT_STATUS Q
+                                     WHERE Q.COMPANY_CODE = r3.COMPANY_CODE AND Q.WAREHOUSE = r3.WAREHOUSE
+                                       AND Q.PART_CODE = r3.PART_CODE AND Q.IC_STATUS_CODE = @Q_QOH_STATUS
+                                       AND Q.UNIT_OF_MEASURE = X3.UOM AND Q.IC_PRODUCT_UOM_TYPE = X3.UOM_TYPE))
+                   THEN 1 ELSE 0 END
         UNION ALL
         SELECT N'PART_BATCHES', CASE WHEN EXISTS (SELECT 1 FROM PART_BATCHES T JOIN #R r
                    ON T.COMPANY_CODE = r.COMPANY_CODE AND T.PART_CODE = r.PART_CODE AND T.WAREHOUSE = r.WAREHOUSE
@@ -1109,8 +1259,13 @@ SELECT
                           WHERE T.COMPANY_CODE = @Q_COMPANY_CODE AND T.QUALITY_DOC_NBR = @Q_DOC_NBR
                             AND T.IC_STATUS_CODE = @Q_STATUS_CODE
                             AND CONVERT(VARCHAR(30), T.ORIGINAL_DOCUMENT_NUMBER)   = @Q_ORIG_DOC_NBR
-                            AND CONVERT(VARCHAR(30), T.ORIGINAL_DOCUMENT_LINE)     = @Q_ORIG_DOC_LINE
+                            AND CONVERT(VARCHAR(30), T.ORIGINAL_DOCUMENT_LINE)     = @Q_HDR_DOC_LINE
                             AND CONVERT(VARCHAR(30), T.ORIGINAL_DOCUMENT_SEQUENCE) = CONVERT(VARCHAR(30), @Q_ORIG_DOC_SEQ))
+                UNION ALL
+                SELECT 4, N'IC_QUALITY_DOC_LINES'
+                WHERE NOT EXISTS (SELECT 1 FROM IC_QUALITY_DOC_LINES T
+                          WHERE T.COMPANY_CODE = @Q_COMPANY_CODE AND T.QUALITY_DOC_NBR = @Q_DOC_NBR
+                            AND T.QUALITY_DOC_LINE_NBR = @Q_LINE_NBR)
             ) Z
             ORDER BY Z.ORD;
 
@@ -1185,6 +1340,260 @@ SELECT
         IC_QUALITY_DOC_LINE_DETAILS = CASE WHEN IC_QUALITY_DOC_LINE_DETAILS = 'PENDING' THEN 'SUCCESS' ELSE IC_QUALITY_DOC_LINE_DETAILS END,
             T.FINAL_STATUS = 'P', T.PROCESSED_AT = SYSDATETIME()
         FROM #LOAD_TRACK T JOIN #R r ON r.GEM_DBKEY = T.GEM_DBKEY;
+
+        -- ---- HISTORY: INV_TRANSACTIONS (header) + INV_TRANSACTION_LINES (line) + INV_TRANSACTION_DETAILS (detail) + IC_MOVEMENTS + DC_LICENSE_PLATE_HISTORY + IC_LOT_TRACE for this record ----------------------
+        -- Same rows ROSS writes in IC_S_L_ADD_SUBTRACT_INVENTORY:
+        --   header : one row per transaction number (company + movement code + DOC_REFERENCE), shared by several records
+        --   line   : one row for this record, SEQUENCE = DC_LICENSE_PLATE_LINES.DOC_LINE under that DOC_REFERENCE
+        --   detail : one row for this record, SEQUENCE = DC_LICENSE_PLATE_LINE_DETAILS.DOC_LINE under that DOC_REFERENCE
+        -- Movement code: record has an original document -> BGNQR (status QR) / BGNQC, otherwise BGNQOH.
+        -- Runs AFTER the inventory COMMIT, in its own transaction + TRY/CATCH: if it fails, only the history rows of
+        -- this record are undone; the inventory load stays committed as 'P' and the loop continues with the next record.
+        -- Columns not listed keep their table default. Not filled (as in the ROSS code, or engine-set): REQUESTOR_CODE,
+        -- SOURCE_REFERENCE, COST_CENTER, DIVISION, GL / transfer accounts, EC / tariff fields, IC_LOT_SEQUENCE,
+        -- ORIG_MOVEMENT_CODE / ORIG_DOC_REFERENCE / ORIG_SEQUENCE.
+        BEGIN TRY
+            SET @HStep = NULL;  SET @HHdrRows = 0;  SET @HLineRows = 0; SET @HDetails = 0; SET @HICMovements = 0; SET @HDCLicensePlateHistory = 0; SET @HLotTrace = 0;
+            SET @HNow   = SYSDATETIME();
+            SET @HToday = CAST(CAST(SYSDATETIME() AS DATE) AS DATETIME);
+
+            IF OBJECT_ID('tempdb..#H') IS NOT NULL DROP TABLE #H;
+            SELECT r.COMPANY_CODE, r.WAREHOUSE, WC.DIVISION, r.PART_CODE, ISNULL(r.BIN_LOCATION, '') AS BIN_LOCATION,
+                   r.DC_LICENSE_PLATE_ID, r.DC_LICENSE_PLATE_LINE, r.IC_LOT_NUMBER, r.IC_STATUS_CODE,
+                   r.UOM_1, r.UOM_2, r.QTY_1, r.QTY_2, ISNULL(r.UNIT_COST, 0) AS UNIT_COST,
+                   CASE WHEN NULLIF(LTRIM(RTRIM(CONVERT(VARCHAR(30), DPL.ORIGINAL_DOCUMENT_NUMBER))), '') IS NULL THEN 'BGNQOH'
+                        WHEN UPPER(LTRIM(RTRIM(r.IC_STATUS_CODE))) = 'QR' THEN 'BGNQR'
+                        ELSE 'BGNQC' END                       AS MOVEMENT_CODE,
+                   CONVERT(VARCHAR(30), DPL.DOC_REFERENCE)     AS DOC_REFERENCE,
+                   TRY_CONVERT(INT, DPL.DOC_LINE)              AS SEQ_NO,
+                   ISNULL(WC.YEAR, 0)                          AS WH_YEAR,
+                   ISNULL(WC.PERIOD, 0)                        AS WH_PERIOD,
+                   DCLPN.DC_LICENSE_PLATE_STATUS               AS DC_LICENSE_PLATE_STATUS,
+                   ISNULL(K.ORIGINAL_DOCUMENT_NUMBER, '') AS ORIGINAL_DOCUMENT_NUMBER,
+                   ISNULL(K.ORIGINAL_DOCUMENT_LINE, '')   AS ORIGINAL_DOCUMENT_LINE,
+                   -- transfer cost inputs (see IC_L_GET_TRANSFER_COST)
+                   WC.TRANSFER_COST_IN_USE                AS TC_IN_USE,
+                   PW.ACTIVATION_STATUS                   AS TC_PW_STATUS,
+                   PW.TRANSFER_COST_METHOD_FLAG           AS TC_METHOD,
+                   PW.TRANSFER_COST_FIXED_VALUE           AS TC_FIXED,
+                   PW.TRANSFER_COST_INCREMENT_VALUE       AS TC_INCREMENT,
+                   PW.TRANSFER_COST_MULTIPLIER_VALUE      AS TC_MULTIPLIER,
+                   CAST(0 AS DECIMAL(30,10))              AS TRANSFER_COST,
+                   CAST(NULL AS VARCHAR(200))             AS TC_ERR
+            INTO #H
+            FROM #R r
+            JOIN DC_LICENSE_PLATE_LINES DPL
+                 ON DPL.COMPANY_CODE = r.COMPANY_CODE
+                AND DPL.DC_LICENSE_PLATE_ID = r.DC_LICENSE_PLATE_ID
+                AND DPL.DC_LICENSE_PLATE_LINE = r.DC_LICENSE_PLATE_LINE
+            LEFT JOIN WAREHOUSE_CONTROLS WC 
+                 ON WC.COMPANY_CODE = r.COMPANY_CODE AND WC.WAREHOUSE = r.WAREHOUSE
+            LEFT JOIN KAS_DC_LOADS K
+                ON K.GEM_DBKEY = r.GEM_DBKEY
+            LEFT JOIN PRODUCT_WAREHOUSE PW
+                ON PW.COMPANY_CODE = r.COMPANY_CODE AND PW.WAREHOUSE = r.WAREHOUSE AND PW.PART_CODE = r.PART_CODE
+            LEFT JOIN DC_LICENSE_PLATES DCLPN
+                ON DCLPN.COMPANY_CODE = r.COMPANY_CODE
+                AND DCLPN.DC_LICENSE_PLATE_ID = r.DC_LICENSE_PLATE_ID
+            WHERE NULLIF(LTRIM(RTRIM(CONVERT(VARCHAR(30), DPL.DOC_REFERENCE))), '') IS NOT NULL
+              AND TRY_CONVERT(INT, DPL.DOC_LINE) IS NOT NULL;
+            SET @HFound = @@ROWCOUNT;
+
+            -- Transfer cost, same rules as IC_L_GET_TRANSFER_COST (unit cost in = H.UNIT_COST):
+            --   transfer cost not in use for the warehouse -> TRANSFER_COST = UNIT_COST (no transfer adjustment, delta 0)
+            --   FIXED       -> TRANSFER_COST_FIXED_VALUE
+            --   INCREMENTAL -> UNIT_COST + TRANSFER_COST_INCREMENT_VALUE
+            --   MULTIPLIER  -> ROUND(UNIT_COST * TRANSFER_COST_MULTIPLIER_VALUE, 4)
+            --   inactive / missing product warehouse or unknown method -> error (ROSS exits with failure)
+            UPDATE #H
+            SET TRANSFER_COST =
+                    CASE WHEN ISNULL(TC_IN_USE, '') <> @HTcYes   THEN UNIT_COST
+                         WHEN TC_METHOD = @HTcFixed              THEN ISNULL(TC_FIXED, 0)
+                         WHEN TC_METHOD = @HTcIncremental        THEN UNIT_COST + ISNULL(TC_INCREMENT, 0)
+                         WHEN TC_METHOD = @HTcMultiplier         THEN ROUND(UNIT_COST * ISNULL(TC_MULTIPLIER, 0), 4)
+                         ELSE UNIT_COST END,
+                TC_ERR =
+                    CASE WHEN ISNULL(TC_IN_USE, '') <> @HTcYes   THEN NULL
+                         WHEN TC_PW_STATUS IS NULL               THEN 'Invalid Part/Warehouse (no PRODUCT_WAREHOUSE row)'
+                         WHEN TC_PW_STATUS <> @HTcActive         THEN 'Product Warehouse has not been activated'
+                         WHEN ISNULL(TC_METHOD, '') NOT IN (@HTcFixed, @HTcIncremental, @HTcMultiplier)
+                                                                 THEN 'Invalid Transfer Cost Method'
+                         ELSE NULL END;
+
+            IF EXISTS (SELECT 1 FROM #H WHERE TC_ERR IS NOT NULL)
+            BEGIN
+                DECLARE @HTcMsg NVARCHAR(400);
+                SELECT TOP (1) @HTcMsg = N'Transfer cost: ' + TC_ERR + N' [warehouse ' + WAREHOUSE + N', part ' + PART_CODE + N']'
+                FROM #H WHERE TC_ERR IS NOT NULL;
+                THROW 51030, @HTcMsg, 1;
+            END;
+
+            IF @HFound = 0
+            BEGIN
+                -- loaded record without a usable transaction number: no history can be written for it
+                UPDATE T
+                SET INV_TRANSACTIONS = 'NOT_ATTEMPTED', INV_TRANSACTION_LINES = 'NOT_ATTEMPTED', INV_TRANSACTION_DETAILS = 'NOT_ATTEMPTED', IC_MOVEMENTS = 'NOT_ATTEMPTED', DC_LICENSE_PLATE_HISTORY = 'NOT_ATTEMPTED', IC_LOT_TRACE = 'NOT_ATTEMPTED',
+                    HIST_ERROR_MESSAGE = N'No history: DOC_REFERENCE is blank or DOC_LINE is not numeric on DC_LICENSE_PLATE_LINES'
+                FROM #LOAD_TRACK T JOIN #R r ON r.GEM_DBKEY = T.GEM_DBKEY;
+            END
+            ELSE
+            BEGIN
+                BEGIN TRANSACTION;
+
+                SET @HStep = 'INV_TRANSACTIONS';
+                INSERT INTO INV_TRANSACTIONS
+                    (COMPANY_CODE, DIVISION, MOVEMENT_CODE, DOC_REFERENCE, SYSTEM_DATE, USERNAME,REQUESTOR_CODE, 
+                     SOURCE_REFERENCE,TRANSACTION_DESCRIPTION, STATUS_FLAG, MOVEMENT_DATE, REQUIRED_DATE)
+                SELECT H.COMPANY_CODE, H.DIVISION, H.MOVEMENT_CODE, H.DOC_REFERENCE, @HNow,
+                       LEFT(@HUser, COL_LENGTH('INV_TRANSACTIONS', 'USERNAME')),'','',
+                       LEFT(ISNULL(IMC.MOVEMENT_DESCRIPTION, ''), COL_LENGTH('INV_TRANSACTIONS', 'TRANSACTION_DESCRIPTION')),
+                       @HNo, @HToday, @HToday
+                FROM #H H
+                LEFT JOIN INVENTORY_MOVEMENTS_CONTROL IMC
+                       ON IMC.COMPANY_CODE = H.COMPANY_CODE AND IMC.MOVEMENT_CODE = H.MOVEMENT_CODE
+                WHERE NOT EXISTS (SELECT 1 FROM INV_TRANSACTIONS X
+                                  WHERE X.COMPANY_CODE = H.COMPANY_CODE AND X.MOVEMENT_CODE = H.MOVEMENT_CODE
+                                    AND X.DOC_REFERENCE = H.DOC_REFERENCE);
+                SET @HHdrRows = @@ROWCOUNT;
+
+                SET @HStep = 'INV_TRANSACTION_LINES';
+                INSERT INTO INV_TRANSACTION_LINES
+                    (COMPANY_CODE, MOVEMENT_CODE, DOC_REFERENCE, SEQUENCE, WAREHOUSE, PART_CODE,
+                     REQUIRED_DATE, UNIT_COST, TRANSFER_COST, STATUS_FLAG, PERIOD, YEAR, SYSTEM_DATE, USERNAME,
+                     IC_LOT_NUMBER, IC_STATUS_CODE,
+                     IC_PACK_OR_CAP_QTY, IC_PACK_OR_CAP_UNIT, IC_NOT_CAP_QTY, IC_NOT_CAP_UNIT)
+                SELECT H.COMPANY_CODE, H.MOVEMENT_CODE, H.DOC_REFERENCE, H.SEQ_NO, H.WAREHOUSE, H.PART_CODE,
+                       '', H.UNIT_COST, H.TRANSFER_COST, @HNo, H.WH_PERIOD, H.WH_YEAR, @HNow,
+                       LEFT(@HUser, COL_LENGTH('INV_TRANSACTION_LINES', 'USERNAME')),
+                       H.IC_LOT_NUMBER, H.IC_STATUS_CODE,
+                       H.QTY_1, ISNULL(H.UOM_1, ''), H.QTY_2, ISNULL(H.UOM_2, '')
+                FROM #H H
+                WHERE NOT EXISTS (SELECT 1 FROM INV_TRANSACTION_LINES X
+                                  WHERE X.COMPANY_CODE = H.COMPANY_CODE AND X.MOVEMENT_CODE = H.MOVEMENT_CODE
+                                    AND X.DOC_REFERENCE = H.DOC_REFERENCE AND X.SEQUENCE = H.SEQ_NO);
+                SET @HLineRows = @@ROWCOUNT;
+
+                SET @HStep = 'INV_TRANSACTION_DETAILS';
+                INSERT INTO INV_TRANSACTION_DETAILS
+                    (COMPANY_CODE, MOVEMENT_CODE, DOC_REFERENCE, SEQUENCE, WAREHOUSE, PART_CODE,BIN_LOCATION,
+                     IC_LOT_NUMBER, IC_PACK_OR_CAP_QTY, IC_PACK_OR_CAP_UNIT,
+                     IC_NOT_CAP_QTY, IC_NOT_CAP_UNIT)
+                SELECT H.COMPANY_CODE, H.MOVEMENT_CODE, H.DOC_REFERENCE, H.SEQ_NO, H.WAREHOUSE, H.PART_CODE,H.BIN_LOCATION,
+                       H.IC_LOT_NUMBER, H.QTY_1, ISNULL(H.UOM_1, ''), H.QTY_2, ISNULL(H.UOM_2, '')
+                FROM #H H
+                WHERE NOT EXISTS (SELECT 1 FROM INV_TRANSACTION_DETAILS X
+                                  WHERE X.COMPANY_CODE = H.COMPANY_CODE AND X.MOVEMENT_CODE = H.MOVEMENT_CODE
+                                    AND X.DOC_REFERENCE = H.DOC_REFERENCE AND X.SEQUENCE = H.SEQ_NO);
+                SET @HDetails = @@ROWCOUNT;
+
+                SET @HStep = 'IC_MOVEMENTS';
+                INSERT INTO IC_MOVEMENTS
+                    (COMPANY_CODE, MOVEMENT_CODE, DOCUMENT_NUMBER, DOCUMENT_LINE, DOCUMENT_SEQUENCE, WAREHOUSE, PART_CODE, UNIT_OF_MEASURE,
+                    SOURCE_MODULE, MOVEMENT_DATE, REQUIRED_DATE, TRANSACTION_DESCRIPTION, UNIT_COST, PERIOD, YEAR, SYSTEM_DATE, USERNAME, 
+                    IC_STATUS_CODE, IC_LOT_NUMBER, IC_MOVE_QUANTITY, DIVISION)
+                SELECT H.COMPANY_CODE, H.MOVEMENT_CODE, H.DOC_REFERENCE, H.SEQ_NO, 0, H.WAREHOUSE, H.PART_CODE, ISNULL(H.UOM_1, ''),
+                       @Q_SOURCE_MODULE, @HToday, @HToday,
+                       LEFT(ISNULL(IMC.MOVEMENT_DESCRIPTION, ''), COL_LENGTH('IC_MOVEMENTS', 'TRANSACTION_DESCRIPTION')),
+                       H.UNIT_COST, H.WH_PERIOD, H.WH_YEAR, @HNow,
+                       LEFT(@HUser, COL_LENGTH('IC_MOVEMENTS', 'USERNAME')), H.IC_STATUS_CODE, H.IC_LOT_NUMBER,
+                       H.QTY_1, H.DIVISION
+                FROM #H H
+                LEFT JOIN INVENTORY_MOVEMENTS_CONTROL IMC
+                       ON IMC.COMPANY_CODE = H.COMPANY_CODE AND IMC.MOVEMENT_CODE = H.MOVEMENT_CODE
+                WHERE NOT EXISTS (SELECT 1 FROM IC_MOVEMENTS X
+                                  WHERE X.COMPANY_CODE = H.COMPANY_CODE AND X.MOVEMENT_CODE = H.MOVEMENT_CODE
+                                    AND X.DOCUMENT_NUMBER = H.DOC_REFERENCE AND X.DOCUMENT_SEQUENCE = H.SEQ_NO);
+                SET @HICMovements = @@ROWCOUNT;
+
+                SET @HStep = 'DC_LICENSE_PLATE_HISTORY';
+                INSERT INTO DC_LICENSE_PLATE_HISTORY
+                    (SYS_REVISED_DATE_TIME, USER_ID, FACILITY_ID, UPDATE_ACTION, DC_TRANSACTION_ID, COMPANY_CODE, DC_LICENSE_PLATE_ID, WAREHOUSE,
+                     BIN_LOCATION, DC_EQUIPMENT_TARE_WEIGHT, DC_EQUIPMENT_TARE_UNIT, DC_LICENSE_PLATE_STATUS, DC_PARENT_LICENSE_PLATE_ID, 
+                     DC_ASN_LOAD_CARRIER_TYPE, WH_XFER_DOC_REFERENCE, DC_LICENSE_PLATE_LINE, PART_CODE, IC_LOT_NUMBER, MH_NUMBER, IC_STATUS_CODE, 
+                     QUANTITY_1, COUNT_QUANTITY_1, UOM_1, QUANTITY_2, COUNT_QUANTITY_2, UOM_2, DOC_REFERENCE, DOC_LINE, PHYS_COUNT_NUMBER, 
+                     COUNT_SEQ_NUMBER, DC_TARE_WEIGHT_1, DC_TARE_WEIGHT_2, DC_TARE_UNIT, AR_DIVISION, DESPATCH_NOTE, DESPATCH_LINE, AP_DIVISION, 
+                     GRN_NUMBER, GRN_LINE_NUMBER, FACTORY, JOB_NUMBER, PROCESS_STAGE, COUNT_SEQ, SOURCE_MODULE, CREDIT_NOTE_NUMBER, CREDIT_NOTE_LINE_NUMBER, 
+                     ORIG_BIN_LOCATION, ORIG_SOURCE_MODULE, ORIGINAL_DOCUMENT_NUMBER, ORIGINAL_DOCUMENT_LINE, ORIGINAL_DOCUMENT_SEQUENCE)
+                SELECT @HNow, LEFT(@HUser, COL_LENGTH('DC_LICENSE_PLATE_HISTORY', 'USER_ID')), '', 'Add New LPN', '',
+                       H.COMPANY_CODE, H.DC_LICENSE_PLATE_ID, H.WAREHOUSE,
+                       H.BIN_LOCATION, 0, '', H.DC_LICENSE_PLATE_STATUS, '', '',
+                       '', H.DC_LICENSE_PLATE_LINE, H.PART_CODE, H.IC_LOT_NUMBER, 0, H.IC_STATUS_CODE,
+                       H.QTY_1, 0, ISNULL(H.UOM_1, ''), H.QTY_2, 0, ISNULL(H.UOM_2, ''), H.DOC_REFERENCE, H.SEQ_NO, 0,
+                       0, 0, 0, '', '', '', '', '', '', '', '', '', '',
+                       0,
+                       @Q_SOURCE_MODULE,
+                       0, 0, '',
+                       @Q_SOURCE_MODULE, H.ORIGINAL_DOCUMENT_NUMBER, H.ORIGINAL_DOCUMENT_LINE, 0
+                FROM #H H
+                WHERE NOT EXISTS (SELECT 1 FROM DC_LICENSE_PLATE_HISTORY X
+                                  WHERE X.COMPANY_CODE = H.COMPANY_CODE AND X.DC_LICENSE_PLATE_ID = H.DC_LICENSE_PLATE_ID
+                                    AND X.DC_LICENSE_PLATE_LINE = H.DC_LICENSE_PLATE_LINE
+                                    AND X.UPDATE_ACTION = 'Add New LPN'
+                                    AND X.DOC_REFERENCE = H.DOC_REFERENCE AND X.DOC_LINE = H.SEQ_NO);
+                SET @HDCLicensePlateHistory = @@ROWCOUNT;
+
+                SET @HStep = 'IC_LOT_TRACE';
+                INSERT INTO IC_LOT_TRACE
+                    (COMPANY_CODE, IC_LT_FROM_INDICATOR, IC_LT_FROM_DIV_WH_FA, IC_LT_FROM_DOC_PART_JOB, IC_LT_FROM_LINE_LOT_STAGE, 
+                    IC_LT_FROM_DOCSEQ_LOTSEQ_LINE, IC_LT_FROM_STATUS, IC_LT_TO_INDICATOR,IC_LT_TO_DIV_WH_FA, IC_LT_TO_DOC_PART_JOB, 
+                    IC_LT_TO_LINE_LOT_STAGE, IC_LT_TO_DOCSEQ_LOTSEQ_LINE, IC_LT_TO_STATUS, SOURCE_MODULE, DESCRIPTION, TRANSACTION_TYPE, 
+                    MOVEMENT_CODE, SYSTEM_DATE, TRANSACTION_DATE, IC_MOVE_QUANTITY_1, UNIT_OF_MEASURE_1, IC_MOVE_QUANTITY_2, UNIT_OF_MEASURE_2)
+                SELECT H.COMPANY_CODE,'', H.WAREHOUSE, H.DOC_REFERENCE, H.SEQ_NO,
+                       0, '', '', '', H.PART_CODE, H.IC_LOT_NUMBER,
+                       0, H.IC_STATUS_CODE, @Q_SOURCE_MODULE, LEFT(ISNULL(IMC.MOVEMENT_DESCRIPTION, ''), COL_LENGTH('IC_LOT_TRACE', 'DESCRIPTION')), '',
+                       H.MOVEMENT_CODE, @HNow, @HToday, H.QTY_1, ISNULL(H.UOM_1, ''), H.QTY_2, ISNULL(H.UOM_2, '')
+                FROM #H H
+                    LEFT JOIN INVENTORY_MOVEMENTS_CONTROL IMC
+                        ON IMC.COMPANY_CODE = H.COMPANY_CODE AND IMC.MOVEMENT_CODE = H.MOVEMENT_CODE
+                WHERE NOT EXISTS (SELECT 1 FROM IC_LOT_TRACE X
+                                  WHERE X.COMPANY_CODE = H.COMPANY_CODE AND X.MOVEMENT_CODE = H.MOVEMENT_CODE
+                                    AND X.IC_LT_FROM_DIV_WH_FA = H.WAREHOUSE
+                                    AND X.IC_LT_FROM_DOC_PART_JOB = H.DOC_REFERENCE
+                                    AND X.IC_LT_FROM_LINE_LOT_STAGE = H.SEQ_NO);
+                SET @HLotTrace = @@ROWCOUNT;
+
+                COMMIT TRANSACTION;
+
+                UPDATE T
+                SET INV_TRANSACTIONS      = CASE WHEN @HHdrRows  > 0 THEN 'SUCCESS' ELSE 'EXISTS' END,
+                    INV_TRANSACTION_LINES = CASE WHEN @HLineRows > 0 THEN 'SUCCESS' ELSE 'EXISTS' END,
+                    INV_TRANSACTION_DETAILS = CASE WHEN @HDetails > 0 THEN 'SUCCESS' ELSE 'EXISTS' END,
+                    IC_MOVEMENTS = CASE WHEN @HICMovements > 0 THEN 'SUCCESS' ELSE 'EXISTS' END,
+                    DC_LICENSE_PLATE_HISTORY = CASE WHEN @HDCLicensePlateHistory > 0 THEN 'SUCCESS' ELSE 'EXISTS' END,
+                    IC_LOT_TRACE = CASE WHEN @HLotTrace > 0 THEN 'SUCCESS' ELSE 'EXISTS' END
+                FROM #LOAD_TRACK T JOIN #R r ON r.GEM_DBKEY = T.GEM_DBKEY;
+            END;
+        END TRY
+        BEGIN CATCH
+            SET @HErrNum  = ERROR_NUMBER();
+            SET @HErrLine = ERROR_LINE();
+            SET @HErrMsg  = ERROR_MESSAGE();
+            IF XACT_STATE() <> 0 ROLLBACK TRANSACTION;     -- only the history transaction is open here; inventory is already committed
+
+            UPDATE T
+            SET INV_TRANSACTIONS      = CASE WHEN @HStep = 'INV_TRANSACTIONS' THEN 'FAILED'
+                                             WHEN @HHdrRows > 0               THEN 'ROLLED_BACK'
+                                             ELSE 'NOT_ATTEMPTED' END,
+                INV_TRANSACTION_LINES = CASE WHEN @HStep = 'INV_TRANSACTION_LINES' THEN 'FAILED'
+                                             WHEN @HLineRows > 0                 THEN 'ROLLED_BACK'
+                                             ELSE 'NOT_ATTEMPTED' END,
+                INV_TRANSACTION_DETAILS = CASE WHEN @HStep = 'INV_TRANSACTION_DETAILS' THEN 'FAILED'
+                                                WHEN @HDetails > 0               THEN 'ROLLED_BACK'
+                                                ELSE 'NOT_ATTEMPTED' END,
+                IC_MOVEMENTS = CASE WHEN @HStep = 'IC_MOVEMENTS' THEN 'FAILED'
+                                   WHEN @HICMovements > 0          THEN 'ROLLED_BACK'
+                                   ELSE 'NOT_ATTEMPTED' END,
+                DC_LICENSE_PLATE_HISTORY = CASE WHEN @HStep = 'DC_LICENSE_PLATE_HISTORY' THEN 'FAILED'
+                                                WHEN @HDCLicensePlateHistory > 0 THEN 'ROLLED_BACK'
+                                                ELSE 'NOT_ATTEMPTED' END,
+                IC_LOT_TRACE = CASE WHEN @HStep = 'IC_LOT_TRACE' THEN 'FAILED'
+                                   WHEN @HLotTrace > 0          THEN 'ROLLED_BACK'
+                                   ELSE 'NOT_ATTEMPTED' END,
+                HIST_ERROR_NUMBER     = @HErrNum,
+                HIST_ERROR_LINE       = @HErrLine,
+                HIST_ERROR_MESSAGE    = @HErrMsg
+            FROM #LOAD_TRACK T JOIN #R r ON r.GEM_DBKEY = T.GEM_DBKEY;
+        END CATCH;
     END TRY
     BEGIN CATCH
         SET @ErrNum  = ERROR_NUMBER();
@@ -1272,3 +1681,26 @@ END;
 SELECT FINAL_STATUS, COUNT(*) AS RECORDS FROM #LOAD_TRACK GROUP BY FINAL_STATUS;
 
 SELECT * FROM #LOAD_TRACK WHERE FINAL_STATUS = 'F' ORDER BY COMPANY_CODE, DC_LICENSE_PLATE_ID, DC_LICENSE_PLATE_LINE;
+
+-- ---------------------------------------------------------------------------
+-- 6. History summary (INV_TRANSACTIONS / INV_TRANSACTION_LINES, written per record in the loop above)
+-- ---------------------------------------------------------------------------
+SELECT INV_TRANSACTIONS, INV_TRANSACTION_LINES, INV_TRANSACTION_DETAILS,IC_MOVEMENTS,DC_LICENSE_PLATE_HISTORY,IC_LOT_TRACE, COUNT(*) AS RECORDS
+FROM #LOAD_TRACK
+WHERE FINAL_STATUS = 'P'
+GROUP BY INV_TRANSACTIONS, INV_TRANSACTION_LINES, INV_TRANSACTION_DETAILS, IC_MOVEMENTS, DC_LICENSE_PLATE_HISTORY, IC_LOT_TRACE
+ORDER BY INV_TRANSACTIONS, INV_TRANSACTION_LINES, INV_TRANSACTION_DETAILS, IC_MOVEMENTS, DC_LICENSE_PLATE_HISTORY, IC_LOT_TRACE;
+
+-- loaded records whose history could not be written (the inventory side of these records IS loaded and committed)
+SELECT GEM_DBKEY, COMPANY_CODE, DC_LICENSE_PLATE_ID, DC_LICENSE_PLATE_LINE,
+       INV_TRANSACTIONS, INV_TRANSACTION_LINES, INV_TRANSACTION_DETAILS, IC_MOVEMENTS, DC_LICENSE_PLATE_HISTORY, HIST_ERROR_NUMBER, HIST_ERROR_LINE, HIST_ERROR_MESSAGE
+FROM #LOAD_TRACK
+WHERE FINAL_STATUS = 'P'
+  AND (INV_TRANSACTIONS IN ('FAILED', 'ROLLED_BACK', 'NOT_ATTEMPTED')
+    OR INV_TRANSACTION_LINES IN ('FAILED', 'NOT_ATTEMPTED')
+    OR INV_TRANSACTION_DETAILS IN ('FAILED', 'NOT_ATTEMPTED')
+    OR IC_MOVEMENTS IN ('FAILED', 'ROLLED_BACK', 'NOT_ATTEMPTED')
+    OR DC_LICENSE_PLATE_HISTORY IN ('FAILED', 'ROLLED_BACK', 'NOT_ATTEMPTED')
+    OR IC_LOT_TRACE IN ('FAILED', 'ROLLED_BACK', 'NOT_ATTEMPTED'))
+    OR (INV_TRANSACTIONS = 'NOT_REQUIRED' AND INV_TRANSACTION_LINES = 'NOT_REQUIRED')   -- last line: committed but history step never ran (e.g. crash)
+ORDER BY COMPANY_CODE, DC_LICENSE_PLATE_ID, DC_LICENSE_PLATE_LINE;

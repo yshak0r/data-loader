@@ -1,11 +1,15 @@
 -- ============================================================================
 -- VALIDATION: KAS_DC_LOADS (ALL product types)
 -- Set-based, re-runnable, keyed on GEM_DBKEY
+-- Only rows that are NOT yet populated (STATUS_FLAG <> 'P', or NULL) are validated.
+-- Rows already populated by the loader (STATUS_FLAG = 'P') are never read into the
+-- checks and never updated, so this can be re-run safely after a partial/failed load.
 -- ============================================================================
 SET NOCOUNT ON;
 
 DECLARE @ACTIVE     VARCHAR(10) = 'A';   -- ACTIVATION_STATUS = active
 DECLARE @CLEAN_FLAG VARCHAR(10) = 'V';
+DECLARE @POPULATED  VARCHAR(10) = 'P';   -- already loaded into inventory: skip these rows
 DECLARE @MSG_MAX INT = (SELECT ISNULL(
     COLUMNPROPERTY(OBJECT_ID('KAS_DC_LOADS'), 'RS_MESSAGE_TEXT', 'charmaxlen'), -1));
 IF @MSG_MAX < 1 SET @MSG_MAX = 4000;
@@ -13,7 +17,7 @@ IF @MSG_MAX < 1 SET @MSG_MAX = 4000;
 IF OBJECT_ID('tempdb..#R') IS NOT NULL DROP TABLE #R;
 
 -- ---- Compute all rule messages once, one row per KAS_DC_LOADS row ----------
--- Window functions are computed in the derived table K (over the full set).
+-- Window functions are computed in the derived table K, over the NOT-populated rows only.
 -- WC and PM are assumed unique per key; everything else uses EXISTS so
 -- joins cannot multiply rows.
 SELECT
@@ -33,6 +37,7 @@ FROM (
         MIN(K0.BIN_LOCATION) OVER (PARTITION BY K0.DC_LICENSE_PLATE_ID, K0.WAREHOUSE)    AS BinMin,
         MAX(K0.BIN_LOCATION) OVER (PARTITION BY K0.DC_LICENSE_PLATE_ID, K0.WAREHOUSE)    AS BinMax
     FROM KAS_DC_LOADS K0
+    WHERE ISNULL(K0.STATUS_FLAG, '') <> @POPULATED      -- skip rows already populated
 ) K
 LEFT JOIN WAREHOUSE_CONTROLS WC ON WC.WAREHOUSE = K.WAREHOUSE
 LEFT JOIN PRODUCT_MASTER     PM ON PM.PART_CODE = K.PART_CODE
@@ -123,12 +128,19 @@ CROSS APPLY (SELECT
       WHEN PM.IC_PRODUCT_UOM_CONTROL IN ('S','P') AND PM.IC_PACKAGED_PRODUCT = 'N'
            AND LTRIM(RTRIM(K.UOM_1)) <> ISNULL(LTRIM(RTRIM(PM.IC_UNIT_CAPACITY)), '')
            THEN CONCAT('; UOM_1 ', K.UOM_1, ' does not match PRODUCT_MASTER.IC_UNIT_CAPACITY ', PM.IC_UNIT_CAPACITY)
+      -- packaged part: UOM_1 must be a PACKAGING unit, never the inventory (capacity) unit
+      WHEN PM.IC_PRODUCT_UOM_CONTROL IN ('S','P') AND PM.IC_PACKAGED_PRODUCT = 'Y'
+           AND LTRIM(RTRIM(K.UOM_1)) = ISNULL(LTRIM(RTRIM(PM.IC_UNIT_CAPACITY)), '')
+           THEN CONCAT('; UOM_1 ', K.UOM_1, ' is the inventory unit (IC_UNIT_CAPACITY) of packaged part ', K.PART_CODE,
+                       ': records have an inventory unit should be packaging unit')
+      -- packaged part: UOM_1 must exist as a packaging unit (type P) for the part
       WHEN PM.IC_PRODUCT_UOM_CONTROL IN ('S','P') AND PM.IC_PACKAGED_PRODUCT = 'Y'
            AND NOT EXISTS (SELECT 1 FROM IC_PRODUCT_MASTER_UNITS S
                            WHERE S.PART_CODE = K.PART_CODE
                              AND S.COMPANY_CODE = K.COMPANY_CODE
+                             AND S.IC_PRODUCT_UOM_TYPE = 'P'
                              AND LTRIM(RTRIM(S.UNIT_OF_MEASURE)) = LTRIM(RTRIM(K.UOM_1)))
-           THEN CONCAT('; UOM_1 ', K.UOM_1, ' does not match IC_PRODUCT_MASTER_UNITS unit of measure for packaged part ', K.PART_CODE)
+           THEN CONCAT('; Packaging item doesn''t exist: UOM_1 ', K.UOM_1, ' is not a packaging unit (IC_PRODUCT_UOM_TYPE = P) in IC_PRODUCT_MASTER_UNITS for part ', K.PART_CODE)
       ELSE '' END AS R7_msg,
 
     -- ---- RULE 8: Duplicate LPN (LPN + PART_CODE + IC_LOT_NUMBER)
@@ -157,6 +169,7 @@ CROSS APPLY (SELECT
               (SELECT STRING_AGG(d.WAREHOUSE, ', ') WITHIN GROUP (ORDER BY d.WAREHOUSE)
                FROM (SELECT DISTINCT T.WAREHOUSE FROM KAS_DC_LOADS T
                      WHERE T.DC_LICENSE_PLATE_ID = K.DC_LICENSE_PLATE_ID
+                       AND ISNULL(T.STATUS_FLAG, '') <> @POPULATED
                        AND T.WAREHOUSE IS NOT NULL) d))
          ELSE '' END AS R9c_msg,
     -- 9d: LPN with more than one bin location in the same warehouse
@@ -169,6 +182,7 @@ CROSS APPLY (SELECT
                FROM (SELECT DISTINCT T.BIN_LOCATION FROM KAS_DC_LOADS T
                      WHERE T.DC_LICENSE_PLATE_ID = K.DC_LICENSE_PLATE_ID
                        AND T.WAREHOUSE = K.WAREHOUSE
+                       AND ISNULL(T.STATUS_FLAG, '') <> @POPULATED
                        AND T.BIN_LOCATION IS NOT NULL) d))
          ELSE '' END AS R9d_msg
 ) X;
@@ -184,7 +198,8 @@ SET STATUS_FLAG     = CASE WHEN R.MSG IS NOT NULL THEN 'E' ELSE @CLEAN_FLAG END,
     RS_MESSAGE_TEXT = CASE WHEN R.MSG IS NOT NULL THEN LEFT(R.MSG, @MSG_MAX)
                            ELSE 'Validated' END
 FROM KAS_DC_LOADS K
-JOIN #R R ON R.GEM_DBKEY = K.GEM_DBKEY;
+JOIN #R R ON R.GEM_DBKEY = K.GEM_DBKEY
+WHERE ISNULL(K.STATUS_FLAG, '') <> @POPULATED;   -- safety: never touch a populated row
 
 -- ============================================================================
 -- SUMMARY: errors per rule (a row with several errors counts under each rule)
@@ -220,7 +235,8 @@ CROSS APPLY (VALUES
     (8,  'Rule 8 - Duplicate LPN',                                  C.r8),
     (9,  'Rule 9 - DC_LICENSE_PLATE_ID checks',                     C.r9),
     (10, 'Total rows with errors',                                  C.total_err),
-    (11, 'Total rows validated (passed)', (SELECT COUNT(*) FROM KAS_DC_LOADS WHERE STATUS_FLAG = 'V'))
+    (11, 'Total rows validated (passed)', (SELECT COUNT(*) FROM KAS_DC_LOADS WHERE STATUS_FLAG = 'V')),
+    (12, 'Rows skipped - already populated (not touched)', (SELECT COUNT(*) FROM KAS_DC_LOADS WHERE STATUS_FLAG = @POPULATED))
 ) V (Sort_Order, Rule_Name, Error_Count)
 ORDER BY V.Sort_Order;
 
