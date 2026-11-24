@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Table2,
   Trash2,
@@ -10,6 +10,8 @@ import {
   Code2,
   Database,
   Info,
+  History,
+  Sparkles,
 } from 'lucide-react';
 import {
   Dialog,
@@ -31,6 +33,47 @@ interface CustomTableDialogProps {
   dbConnected: boolean;
   activeTargetTable?: string | null;
   onTableCreatedOrDropped?: (tableFullName?: string) => void;
+}
+
+interface SavedTableDDL {
+  fullName: string;
+  tableName: string;
+  schemaName: string;
+  script: string;
+  savedAt: string;
+}
+
+const DDL_STORAGE_KEY = 'custom_table_ddl_catalog';
+
+function getSavedCatalog(): Record<string, SavedTableDDL> {
+  try {
+    const raw = localStorage.getItem(DDL_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch (_) {
+    return {};
+  }
+}
+
+function persistSavedDDL(item: SavedTableDDL) {
+  try {
+    const catalog = getSavedCatalog();
+    catalog[item.fullName] = item;
+    localStorage.setItem(DDL_STORAGE_KEY, JSON.stringify(catalog));
+  } catch (_) {}
+}
+
+function extractTableFromDDL(sql: string): { fullName: string; tableName: string; schemaName: string } | null {
+  const match = sql.match(/CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:\[?(\w+)\]?\.)?\[?(\w+)\]?/i);
+  if (match) {
+    const schema = match[1] || 'dbo';
+    const table = match[2];
+    return {
+      fullName: `[${schema}].[${table}]`,
+      tableName: table,
+      schemaName: schema,
+    };
+  }
+  return null;
 }
 
 const DEFAULT_DDL_TEMPLATE = `-- Custom Staging Table Creation Script
@@ -70,6 +113,8 @@ export const CustomTableDialog: React.FC<CustomTableDialogProps> = ({
   const [ddlScript, setDdlScript] = useState(DEFAULT_DDL_TEMPLATE);
   const [isExecuting, setIsExecuting] = useState(false);
   const [result, setResult] = useState<{ success: boolean; message: string } | null>(null);
+  const [savedCatalog, setSavedCatalog] = useState<Record<string, SavedTableDDL>>(() => getSavedCatalog());
+  const [selectedSavedKey, setSelectedSavedKey] = useState<string>('__DEFAULT__');
 
   // Drop Tab State
   const [tables, setTables] = useState<StagingTableInfo[]>([]);
@@ -100,6 +145,7 @@ export const CustomTableDialog: React.FC<CustomTableDialogProps> = ({
   useEffect(() => {
     if (open) {
       loadTables();
+      setSavedCatalog(getSavedCatalog());
       setResult(null);
       setDropResult(null);
       setConfirmDropText('');
@@ -114,15 +160,99 @@ export const CustomTableDialog: React.FC<CustomTableDialogProps> = ({
       const res = await dbClient.executeCustomDDL(ddlScript);
       setResult(res);
       if (res.success) {
+        // Automatically retain the executed DDL query in catalog so user can find, inspect, and re-create it
+        const extracted = extractTableFromDDL(ddlScript);
+        const fullName = extracted ? extracted.fullName : (activeTargetTable || '[dbo].[CUSTOM_TABLE]');
+        const parts = fullName.replace(/[\[\]]/g, '').split('.');
+        const schemaName = parts.length > 1 ? parts[0] : 'dbo';
+        const tableName = parts.length > 1 ? parts[1] : parts[0];
+
+        const entry: SavedTableDDL = {
+          fullName,
+          tableName,
+          schemaName,
+          script: ddlScript,
+          savedAt: new Date().toISOString(),
+        };
+        persistSavedDDL(entry);
+        setSavedCatalog(getSavedCatalog());
+        setSelectedSavedKey(fullName);
+
         await loadTables();
         if (onTableCreatedOrDropped) {
-          onTableCreatedOrDropped();
+          onTableCreatedOrDropped(fullName);
         }
       }
     } catch (err: any) {
       setResult({ success: false, message: err.message || 'Execution error.' });
     } finally {
       setIsExecuting(false);
+    }
+  };
+
+  const handleLoadDDLForEdit = async (tableFullName: string) => {
+    // 1. If saved script exists in catalog, load the exact original script
+    if (savedCatalog[tableFullName]) {
+      setDdlScript(savedCatalog[tableFullName].script);
+      setSelectedSavedKey(tableFullName);
+      setActiveTab('create');
+      setResult({
+        success: true,
+        message: `Loaded saved DDL for ${tableFullName}. You can modify column definitions and re-run.`,
+      });
+      return;
+    }
+
+    // 2. Otherwise generate clean DDL template from live SQL Server introspected schema
+    try {
+      const res = await dbClient.queryGrid({
+        targetTable: tableFullName,
+        page: 1,
+        pageSize: 1,
+        statusFilter: 'ALL',
+        search: '',
+      });
+      const cols = res.columns || [];
+      if (cols.length > 0) {
+        const parts = tableFullName.replace(/[\[\]]/g, '').split('.');
+        const s = parts.length > 1 ? parts[0] : 'dbo';
+        const t = parts.length > 1 ? parts[1] : parts[0];
+        const colDefs = cols.map((c) => {
+          const identityStr = c.isIdentity ? ' IDENTITY(1,1)' : '';
+          const nullStr = c.isNullable ? 'NULL' : 'NOT NULL';
+          let typeStr = c.dataType || 'varchar(50)';
+          if (['varchar', 'nvarchar', 'char', 'nchar'].includes(typeStr.toLowerCase()) && c.maxLength > 0) {
+            typeStr = `${typeStr}(${c.maxLength})`;
+          }
+          return `        [${c.name}] [${typeStr}]${identityStr} ${nullStr}`;
+        });
+
+        const generatedDDL = `-- Generated DDL for ${tableFullName}
+IF NOT EXISTS (SELECT * FROM sys.schemas WHERE name = '${s}')
+BEGIN
+    EXEC('CREATE SCHEMA [${s}]')
+END
+GO
+
+IF OBJECT_ID(N'${tableFullName}', N'U') IS NULL
+BEGIN
+    CREATE TABLE ${tableFullName} (
+${colDefs.join(',\n')}
+    );
+END
+GO
+`;
+        setDdlScript(generatedDDL);
+        setActiveTab('create');
+        setResult({
+          success: true,
+          message: `Reconstructed DDL from live database schema for ${tableFullName}.`,
+        });
+      } else {
+        setActiveTab('create');
+      }
+    } catch (_) {
+      setActiveTab('create');
     }
   };
 
@@ -149,6 +279,7 @@ export const CustomTableDialog: React.FC<CustomTableDialogProps> = ({
 
   const customTables = tables.filter((t) => !t.isStandard);
   const selectedTableMeta = tables.find((t) => t.fullName === selectedDropTable);
+  const savedEntries = Object.values(savedCatalog);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -184,12 +315,44 @@ export const CustomTableDialog: React.FC<CustomTableDialogProps> = ({
 
             {/* TAB 1: CREATE / ALTER DDL */}
             <TabsContent value="create" className="space-y-3.5 mt-0">
-              <div className="flex items-center justify-between text-xs">
-                <span className="text-muted-foreground font-medium">SQL DDL Execution Script</span>
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
+                <div className="flex items-center gap-2">
+                  <span className="text-muted-foreground font-medium shrink-0">DDL Script:</span>
+                  {savedEntries.length > 0 && (
+                    <div className="flex items-center gap-1.5">
+                      <History className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+                      <select
+                        value={selectedSavedKey}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setSelectedSavedKey(val);
+                          if (val === '__DEFAULT__') {
+                            setDdlScript(DEFAULT_DDL_TEMPLATE);
+                          } else if (savedCatalog[val]) {
+                            setDdlScript(savedCatalog[val].script);
+                          }
+                        }}
+                        className="px-2 py-1 text-[11px] bg-background border border-border rounded text-foreground focus:outline-none focus:ring-1 focus:ring-primary font-mono max-w-[220px] truncate"
+                      >
+                        <option value="__DEFAULT__">Standard Template</option>
+                        <optgroup label="Saved Creation Scripts">
+                          {savedEntries.map((item) => (
+                            <option key={item.fullName} value={item.fullName}>
+                              {item.fullName} ({new Date(item.savedAt).toLocaleDateString()})
+                            </option>
+                          ))}
+                        </optgroup>
+                      </select>
+                    </div>
+                  )}
+                </div>
                 <button
                   type="button"
-                  onClick={() => setDdlScript(DEFAULT_DDL_TEMPLATE)}
-                  className="text-primary hover:underline flex items-center gap-1 text-[11px]"
+                  onClick={() => {
+                    setSelectedSavedKey('__DEFAULT__');
+                    setDdlScript(DEFAULT_DDL_TEMPLATE);
+                  }}
+                  className="text-primary hover:underline flex items-center gap-1 text-[11px] self-end sm:self-auto"
                 >
                   <FileCode2 className="w-3 h-3" />
                   Reset to Template
@@ -275,7 +438,7 @@ export const CustomTableDialog: React.FC<CustomTableDialogProps> = ({
               </div>
 
               {selectedTableMeta && (
-                <div className="p-3 bg-muted/40 rounded-lg border border-border/80 space-y-1.5 text-xs">
+                <div className="p-3 bg-muted/40 rounded-lg border border-border/80 space-y-2 text-xs">
                   <div className="flex items-center justify-between">
                     <span className="text-muted-foreground">Target Table:</span>
                     <span className="font-mono font-medium text-foreground">{selectedTableMeta.fullName}</span>
@@ -289,6 +452,23 @@ export const CustomTableDialog: React.FC<CustomTableDialogProps> = ({
                   <div className="flex items-center justify-between">
                     <span className="text-muted-foreground">Created Date:</span>
                     <span className="font-mono text-muted-foreground">{selectedTableMeta.createDate}</span>
+                  </div>
+                  <div className="pt-1.5 border-t border-border/50 flex items-center justify-between">
+                    <span className="text-[11px] text-muted-foreground">
+                      {savedCatalog[selectedTableMeta.fullName]
+                        ? 'Saved creation query is available'
+                        : 'DDL can be reverse-engineered from live schema'}
+                    </span>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => handleLoadDDLForEdit(selectedTableMeta.fullName)}
+                      className="h-7 text-[11px] gap-1.5 border-indigo-500/30 hover:bg-indigo-500/10 text-indigo-400"
+                    >
+                      <History className="w-3.5 h-3.5" />
+                      Load DDL to Edit / Re-create
+                    </Button>
                   </div>
                 </div>
               )}
