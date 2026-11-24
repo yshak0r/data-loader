@@ -525,9 +525,9 @@ class DbClient {
     }
   }
 
-  public async clearStagedData(domain?: LoaderDomain): Promise<{ success: boolean; deletedRows: number; message: string }> {
+  public async clearStagedData(domainOrTable?: string): Promise<{ success: boolean; deletedRows: number; message: string }> {
     try {
-      const res = await App.ClearStagedData(domain || 'inventory');
+      const res = await App.ClearStagedData(domainOrTable || 'inventory');
       return {
         success: res.success,
         deletedRows: res.deletedRows,

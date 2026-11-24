@@ -433,7 +433,8 @@ export const App: React.FC = () => {
 
   // Clear staged records from the active staging table
   const handleClearStagedComplete = async (deletedRows: number) => {
-    const tableName = domain === 'sales_orders' ? '[FIN].[KAS_SO_LOADS]' : '[FIN].[KAS_DC_LOADS]';
+    const tableName = activeCustomTable
+      || (domain === 'sales_orders' ? '[FIN].[KAS_SO_LOADS]' : '[FIN].[KAS_DC_LOADS]');
     setFileName('');
     setLastStagedInfo(
       `Staged data cleared — ${deletedRows.toLocaleString()} row(s) removed from [${dbConfig.database}].${tableName}`
@@ -695,6 +696,7 @@ export const App: React.FC = () => {
       {/* Clear Staged Data Modal */}
       <ClearStagedDataDialog
         domain={domain}
+        targetTable={activeCustomTable || undefined}
         open={isClearStagedDialogOpen}
         onOpenChange={setIsClearStagedDialogOpen}
         dbConnected={dbConnected}

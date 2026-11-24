@@ -28,6 +28,8 @@ interface ClearStagedDataDialogProps {
   dbDatabase: string;
   stagedRowsCount: number;
   domain?: LoaderDomain;
+  /** Full custom table name (e.g. "[dbo].[MY_TABLE]"). When set, overrides domain-based table resolution. */
+  targetTable?: string;
   onClearComplete: (deletedRows: number) => Promise<void>;
 }
 
@@ -39,12 +41,14 @@ export const ClearStagedDataDialog: React.FC<ClearStagedDataDialogProps> = ({
   dbDatabase,
   stagedRowsCount,
   domain = 'inventory',
+  targetTable,
   onClearComplete,
 }) => {
   const [isClearing, setIsClearing] = useState(false);
   const [result, setResult] = useState<{ success: boolean; message: string; deletedRows: number } | null>(null);
 
-  const tableName = domain === 'sales_orders' ? '[FIN].[KAS_SO_LOADS]' : '[FIN].[KAS_DC_LOADS]';
+  // Use the explicit custom table when provided, otherwise fall back to domain-based standard tables.
+  const tableName = targetTable || (domain === 'sales_orders' ? '[FIN].[KAS_SO_LOADS]' : '[FIN].[KAS_DC_LOADS]');
 
   const handleClear = async () => {
     if (!dbConnected) return;
@@ -52,7 +56,8 @@ export const ClearStagedDataDialog: React.FC<ClearStagedDataDialogProps> = ({
     setIsClearing(true);
     setResult(null);
     try {
-      const res = await dbClient.clearStagedData(domain);
+      // Pass the resolved table name directly so the backend truncates the right table.
+      const res = await dbClient.clearStagedData(targetTable || domain);
       setResult(res);
       if (res.success) {
         await onClearComplete(res.deletedRows);

@@ -233,10 +233,7 @@ func (m *Manager) EnsureTableExistsWithScript(ctx context.Context, domain string
 		return false, err.Error()
 	}
 
-	tableName := "[FIN].[KAS_DC_LOADS]"
-	if domain == "sales_orders" {
-		tableName = "[FIN].[KAS_SO_LOADS]"
-	}
+	tableName, _ := ResolveTableName(domain, "")
 
 	scriptToRun := scriptContent
 	if strings.TrimSpace(scriptToRun) == "" {
@@ -293,10 +290,7 @@ func (m *Manager) DropStagingTable(ctx context.Context, domain string) (bool, st
 		return false, err.Error()
 	}
 
-	tableName := "[FIN].[KAS_DC_LOADS]"
-	if domain == "sales_orders" {
-		tableName = "[FIN].[KAS_SO_LOADS]"
-	}
+	tableName, _ := ResolveTableName(domain, "")
 
 	dropSQL := fmt.Sprintf("IF OBJECT_ID('%s', 'U') IS NOT NULL DROP TABLE %s;", tableName, tableName)
 	if _, err := db.ExecContext(ctx, dropSQL); err != nil {
@@ -314,10 +308,7 @@ func (m *Manager) ClearStagedData(ctx context.Context, domain string) (bool, int
 		return false, 0, err.Error()
 	}
 
-	tableName := "[FIN].[KAS_DC_LOADS]"
-	if domain == "sales_orders" {
-		tableName = "[FIN].[KAS_SO_LOADS]"
-	}
+	tableName, _ := ResolveTableName(domain, "")
 
 	// First count existing rows
 	var count int
