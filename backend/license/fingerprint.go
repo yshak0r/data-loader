@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -21,7 +22,18 @@ var (
 	fpMu              sync.RWMutex
 )
 
+func getMachineIdCachePath() string {
+	appData := os.Getenv("APPDATA")
+	if appData == "" {
+		appData = os.Getenv("USERPROFILE")
+	}
+	dir := filepath.Join(appData, "RossDcLoader")
+	_ = os.MkdirAll(dir, 0755)
+	return filepath.Join(dir, "machine.id")
+}
+
 // GetMachineFingerprint computes the immutable hardware fingerprint of the local Windows PC.
+// Reads instantly from on-disk cache if previously generated (< 1ms).
 func GetMachineFingerprint() string {
 	fpMu.RLock()
 	if cachedFingerprint != "" {
@@ -29,6 +41,18 @@ func GetMachineFingerprint() string {
 		return cachedFingerprint
 	}
 	fpMu.RUnlock()
+
+	// Instant startup path: check persistent on-disk hardware identifier
+	cachePath := getMachineIdCachePath()
+	if data, err := os.ReadFile(cachePath); err == nil {
+		id := strings.TrimSpace(string(data))
+		if strings.HasPrefix(id, "ROSS-") && len(id) == 24 {
+			fpMu.Lock()
+			cachedFingerprint = id
+			fpMu.Unlock()
+			return id
+		}
+	}
 
 	return RegenerateMachineFingerprint()
 }
@@ -56,30 +80,64 @@ func RegenerateMachineFingerprint() string {
 	part4 := hash[12:16]
 
 	cachedFingerprint = fmt.Sprintf("ROSS-%s-%s-%s-%s", part1, part2, part3, part4)
+
+	// Persist to disk for instant application startup on subsequent launches
+	cachePath := getMachineIdCachePath()
+	_ = os.WriteFile(cachePath, []byte(cachedFingerprint), 0644)
+
 	return cachedFingerprint
 }
 
 func getRawHardwareTokens() []string {
 	var tokens []string
 
-	// 1. Motherboard UUID
-	if uuid := execPowerShellCommand("(Get-CimInstance Win32_ComputerSystemProduct).UUID"); uuid != "" {
-		if uuid != "00000000-0000-0000-0000-000000000000" && !strings.Contains(strings.ToLower(uuid), "error") {
-			tokens = append(tokens, fmt.Sprintf("UUID:%s", uuid))
-		}
-	}
+	// Single combined PowerShell query for UUID, BIOS, and CPU (eliminates 3 sequential process spawns)
+	combinedCmd := "[Console]::WriteLine((Get-CimInstance Win32_ComputerSystemProduct).UUID); [Console]::WriteLine((Get-CimInstance Win32_BIOS).SerialNumber); [Console]::WriteLine((Get-CimInstance Win32_Processor).ProcessorId)"
+	combinedOut := execPowerShellCommand(combinedCmd)
 
-	// 2. BIOS Serial
-	if bios := execPowerShellCommand("(Get-CimInstance Win32_BIOS).SerialNumber"); bios != "" {
-		if strings.ToLower(bios) != "to be filled by o.e.m." && !strings.Contains(strings.ToLower(bios), "error") {
-			tokens = append(tokens, fmt.Sprintf("BIOS:%s", bios))
+	if combinedOut != "" {
+		lines := strings.Split(combinedOut, "\n")
+		// Clean line endings
+		for i := range lines {
+			lines[i] = strings.TrimSpace(lines[i])
 		}
-	}
 
-	// 3. Processor ID
-	if cpu := execPowerShellCommand("(Get-CimInstance Win32_Processor).ProcessorId"); cpu != "" {
-		if !strings.Contains(strings.ToLower(cpu), "error") {
-			tokens = append(tokens, fmt.Sprintf("CPU:%s", cpu))
+		if len(lines) >= 1 && lines[0] != "" {
+			uuid := lines[0]
+			if uuid != "00000000-0000-0000-0000-000000000000" && !strings.Contains(strings.ToLower(uuid), "error") {
+				tokens = append(tokens, fmt.Sprintf("UUID:%s", uuid))
+			}
+		}
+
+		if len(lines) >= 2 && lines[1] != "" {
+			bios := lines[1]
+			if strings.ToLower(bios) != "to be filled by o.e.m." && !strings.Contains(strings.ToLower(bios), "error") {
+				tokens = append(tokens, fmt.Sprintf("BIOS:%s", bios))
+			}
+		}
+
+		if len(lines) >= 3 && lines[2] != "" {
+			cpu := lines[2]
+			if !strings.Contains(strings.ToLower(cpu), "error") {
+				tokens = append(tokens, fmt.Sprintf("CPU:%s", cpu))
+			}
+		}
+	} else {
+		// Fallback to individual sequential queries if combined batch failed
+		if uuid := execPowerShellCommand("(Get-CimInstance Win32_ComputerSystemProduct).UUID"); uuid != "" {
+			if uuid != "00000000-0000-0000-0000-000000000000" && !strings.Contains(strings.ToLower(uuid), "error") {
+				tokens = append(tokens, fmt.Sprintf("UUID:%s", uuid))
+			}
+		}
+		if bios := execPowerShellCommand("(Get-CimInstance Win32_BIOS).SerialNumber"); bios != "" {
+			if strings.ToLower(bios) != "to be filled by o.e.m." && !strings.Contains(strings.ToLower(bios), "error") {
+				tokens = append(tokens, fmt.Sprintf("BIOS:%s", bios))
+			}
+		}
+		if cpu := execPowerShellCommand("(Get-CimInstance Win32_Processor).ProcessorId"); cpu != "" {
+			if !strings.Contains(strings.ToLower(cpu), "error") {
+				tokens = append(tokens, fmt.Sprintf("CPU:%s", cpu))
+			}
 		}
 	}
 

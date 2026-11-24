@@ -24,6 +24,11 @@ type App struct {
 
 // NewApp creates a new App application struct.
 func NewApp() *App {
+	// Pre-warm machine fingerprint so startup licensing check resolves in < 1ms
+	go func() {
+		_ = license.GetMachineFingerprint()
+	}()
+
 	return &App{
 		dbManager:  database.NewManager(),
 		scriptsMgr: scripts.NewManager(),
