@@ -190,72 +190,6 @@ export const CustomTableDialog: React.FC<CustomTableDialogProps> = ({
     }
   };
 
-  const handleLoadDDLForEdit = async (tableFullName: string) => {
-    // 1. If saved script exists in catalog, load the exact original script
-    if (savedCatalog[tableFullName]) {
-      setDdlScript(savedCatalog[tableFullName].script);
-      setSelectedSavedKey(tableFullName);
-      setActiveTab('create');
-      setResult({
-        success: true,
-        message: `Loaded saved DDL for ${tableFullName}. You can modify column definitions and re-run.`,
-      });
-      return;
-    }
-
-    // 2. Otherwise generate clean DDL template from live SQL Server introspected schema
-    try {
-      const res = await dbClient.queryGrid({
-        targetTable: tableFullName,
-        page: 1,
-        pageSize: 1,
-        statusFilter: 'ALL',
-        search: '',
-      });
-      const cols = res.columns || [];
-      if (cols.length > 0) {
-        const parts = tableFullName.replace(/[\[\]]/g, '').split('.');
-        const s = parts.length > 1 ? parts[0] : 'dbo';
-        const t = parts.length > 1 ? parts[1] : parts[0];
-        const colDefs = cols.map((c) => {
-          const identityStr = c.isIdentity ? ' IDENTITY(1,1)' : '';
-          const nullStr = c.isNullable ? 'NULL' : 'NOT NULL';
-          let typeStr = c.dataType || 'varchar(50)';
-          if (['varchar', 'nvarchar', 'char', 'nchar'].includes(typeStr.toLowerCase()) && c.maxLength > 0) {
-            typeStr = `${typeStr}(${c.maxLength})`;
-          }
-          return `        [${c.name}] [${typeStr}]${identityStr} ${nullStr}`;
-        });
-
-        const generatedDDL = `-- Generated DDL for ${tableFullName}
-IF NOT EXISTS (SELECT * FROM sys.schemas WHERE name = '${s}')
-BEGIN
-    EXEC('CREATE SCHEMA [${s}]')
-END
-GO
-
-IF OBJECT_ID(N'${tableFullName}', N'U') IS NULL
-BEGIN
-    CREATE TABLE ${tableFullName} (
-${colDefs.join(',\n')}
-    );
-END
-GO
-`;
-        setDdlScript(generatedDDL);
-        setActiveTab('create');
-        setResult({
-          success: true,
-          message: `Reconstructed DDL from live database schema for ${tableFullName}.`,
-        });
-      } else {
-        setActiveTab('create');
-      }
-    } catch (_) {
-      setActiveTab('create');
-    }
-  };
-
   const handleDropTable = async () => {
     if (!dbConnected || !selectedDropTable) return;
     setIsDropping(true);
@@ -438,7 +372,7 @@ GO
               </div>
 
               {selectedTableMeta && (
-                <div className="p-3 bg-muted/40 rounded-lg border border-border/80 space-y-2 text-xs">
+                <div className="p-3 bg-muted/40 rounded-lg border border-border/80 space-y-1.5 text-xs">
                   <div className="flex items-center justify-between">
                     <span className="text-muted-foreground">Target Table:</span>
                     <span className="font-mono font-medium text-foreground">{selectedTableMeta.fullName}</span>
@@ -452,23 +386,6 @@ GO
                   <div className="flex items-center justify-between">
                     <span className="text-muted-foreground">Created Date:</span>
                     <span className="font-mono text-muted-foreground">{selectedTableMeta.createDate}</span>
-                  </div>
-                  <div className="pt-1.5 border-t border-border/50 flex items-center justify-between">
-                    <span className="text-[11px] text-muted-foreground">
-                      {savedCatalog[selectedTableMeta.fullName]
-                        ? 'Saved creation query is available'
-                        : 'DDL can be reverse-engineered from live schema'}
-                    </span>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() => handleLoadDDLForEdit(selectedTableMeta.fullName)}
-                      className="h-7 text-[11px] gap-1.5 border-indigo-500/30 hover:bg-indigo-500/10 text-indigo-400"
-                    >
-                      <History className="w-3.5 h-3.5" />
-                      Load DDL to Edit / Re-create
-                    </Button>
                   </div>
                 </div>
               )}
