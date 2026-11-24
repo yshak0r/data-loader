@@ -9,7 +9,6 @@ import {
   Database,
   Layers,
   Settings,
-  HelpCircle,
   ShieldCheck,
   Terminal,
   ArrowRight,
@@ -78,10 +77,6 @@ export const DocumentationView: React.FC = () => {
               <TabsTrigger value="scripts" className="gap-1.5 text-xs">
                 <Settings className="w-3.5 h-3.5" />
                 SQL Scripts
-              </TabsTrigger>
-              <TabsTrigger value="faq" className="gap-1.5 text-xs">
-                <HelpCircle className="w-3.5 h-3.5" />
-                FAQ & Diagnostics
               </TabsTrigger>
             </TabsList>
           </Tabs>
@@ -405,7 +400,7 @@ export const DocumentationView: React.FC = () => {
                     <Table2 className="w-3.5 h-3.5 text-muted-foreground" /> Custom Tables & DDL
                   </span>
                   <p className="text-[11px]">
-                    Switch between schemas with 1-click pills, create custom staging tables, and reuse saved creation queries to drop and re-create.
+                    Switch between schemas with 1-click pills and create custom staging tables with saved DDL script history.
                   </p>
                 </div>
               </CardContent>
@@ -570,6 +565,62 @@ export const DocumentationView: React.FC = () => {
                       <strong className="text-foreground">Load Execution Failed:</strong>
                       <p className="text-muted-foreground font-sans mt-0.5">Rows with status <code className="text-amber-600 font-bold">F</code> that failed live loader execution.</p>
                     </div>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Diagnostic Codes Reference */}
+            <Card className="bg-card border-border">
+              <CardHeader>
+                <CardTitle className="text-sm font-semibold text-foreground flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 text-amber-500" />
+                  Ross Error Diagnostic Code Reference
+                </CardTitle>
+                <CardDescription className="text-xs text-muted-foreground">
+                  Common Ross ERP diagnostic message codes encountered during Dry Run validation:
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-2 text-xs">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 font-mono text-[11px]">
+                  <div className="p-3 rounded-lg bg-secondary/30 border border-border">
+                    <div className="flex items-center gap-2">
+                      <span className="text-rose-600 dark:text-rose-400 font-bold">P_71560:</span>
+                      <span className="text-foreground font-sans font-medium">Pack UOM Mismatch</span>
+                    </div>
+                    <p className="text-muted-foreground font-sans text-xs mt-1">
+                      Product has Packaged flag = 'Y' in Product Master, but CSV supplied capacity UOM or invalid packaging unit.
+                    </p>
+                  </div>
+
+                  <div className="p-3 rounded-lg bg-secondary/30 border border-border">
+                    <div className="flex items-center gap-2">
+                      <span className="text-rose-600 dark:text-rose-400 font-bold">P_10648 / P_42234:</span>
+                      <span className="text-foreground font-sans font-medium">Movement Code Missing</span>
+                    </div>
+                    <p className="text-muted-foreground font-sans text-xs mt-1">
+                      Movement code (<code className="text-foreground">BGNQOH</code>, <code className="text-foreground">BGNQC</code>, <code className="text-foreground">BGNQR</code>) is not defined in <code className="text-foreground">INVENTORY_MOVEMENTS_CONTROL</code>.
+                    </p>
+                  </div>
+
+                  <div className="p-3 rounded-lg bg-secondary/30 border border-border">
+                    <div className="flex items-center gap-2">
+                      <span className="text-amber-600 dark:text-amber-400 font-bold">P_82065:</span>
+                      <span className="text-foreground font-sans font-medium">Expired Lot Warning</span>
+                    </div>
+                    <p className="text-muted-foreground font-sans text-xs mt-1">
+                      Severity downgraded to informational in dcload routines to allow historical balance imports.
+                    </p>
+                  </div>
+
+                  <div className="p-3 rounded-lg bg-secondary/30 border border-border">
+                    <div className="flex items-center gap-2">
+                      <span className="text-amber-600 dark:text-amber-400 font-bold">P_13647:</span>
+                      <span className="text-foreground font-sans font-medium">Quantity Precision Adjusted</span>
+                    </div>
+                    <p className="text-muted-foreground font-sans text-xs mt-1">
+                      Informational warning indicating decimal quantity precision was adjusted to match the UOM precision mask.
+                    </p>
                   </div>
                 </div>
               </CardContent>
@@ -742,18 +793,18 @@ export const DocumentationView: React.FC = () => {
                   </div>
                 </div>
 
-                {/* Custom Table DDL Creation & Retention */}
+                {/* Custom Table DDL Creation & History */}
                 <div className="p-4 rounded-lg bg-secondary/20 border border-border space-y-2.5">
                   <h5 className="font-semibold text-foreground text-xs uppercase tracking-wide flex items-center gap-2">
                     <History className="w-3.5 h-3.5 text-indigo-400" />
-                    Custom Table DDL Retention & Re-Creation Workflow
+                    Custom Table DDL Creation & Retention
                   </h5>
                   <p className="text-[11px] leading-relaxed">
                     Under the <strong>Manage Custom Tables</strong> modal:
                   </p>
                   <ul className="list-disc list-inside space-y-1.5 text-[11px] text-muted-foreground pl-1">
-                    <li><strong className="text-foreground">Automatic Query Retention:</strong> Whenever you execute a table creation script, the tool automatically stores the full DDL script in your local catalog. You can recall it anytime from the <em>Saved Creation Scripts</em> dropdown.</li>
-                    <li><strong className="text-foreground">Edit & Re-Create in 1-Click:</strong> In the <em>Drop Table</em> tab, click <strong>Load DDL to Edit / Re-create</strong> on any table. The tool loads the exact saved creation script (or reverse-engineers DDL from live SQL Server schema if created externally) directly into the DDL editor so you can modify columns, drop the table, and execute the updated script immediately.</li>
+                    <li><strong className="text-foreground">Automatic Query Retention:</strong> Whenever you execute a table creation script, the tool automatically stores the full DDL script in your local catalog. You can recall and inspect it anytime from the <em>Saved Creation Scripts</em> dropdown.</li>
+                    <li><strong className="text-foreground">Drop Table:</strong> Obsolete custom staging tables can be dropped safely from the <em>Drop Table</em> tab with row count inspection and typed <code className="font-mono text-foreground font-bold">DROP</code> confirmation.</li>
                     <li><strong className="text-foreground">Multi-Batch Execution:</strong> Supports <code className="font-mono text-foreground">GO</code> batch delimiters for schema existence checks and table creation in a single transaction.</li>
                   </ul>
                 </div>
@@ -815,7 +866,7 @@ export const DocumentationView: React.FC = () => {
                       <Badge variant="outline" className="text-[10px]">Maintenance</Badge>
                     </div>
                     <p className="text-muted-foreground font-sans">
-                      Safely truncates the staging table to prepare for fresh file uploads without dropping table structure or affecting live transactions.
+                      Executes a scoped purge of live Ross ERP operational tables (such as inventory balances, LPN plates, bin locations, quality documents, or un-invoiced orders) strictly for the warehouses/orders in scope, without altering the staging table.
                     </p>
                   </div>
                 </div>
@@ -831,158 +882,6 @@ export const DocumentationView: React.FC = () => {
                     <li><strong className="text-foreground">Live SQL Execution:</strong> Use the <strong>Execute Script</strong> button on any script to execute DDL or maintenance operations directly on the connected database.</li>
                     <li><strong className="text-foreground">1-Click Reset:</strong> Click <strong>Restore Default</strong> anytime to discard custom modifications and restore factory defaults.</li>
                   </ul>
-                </div>
-              </CardContent>
-            </Card>
-          </TabsContent>
-
-          {/* TAB 5: FAQ & DIAGNOSTICS */}
-          <TabsContent value="faq" className="m-0 space-y-6">
-            {/* FAQ Accordion-like cards */}
-            <div className="space-y-3">
-              <Card className="bg-card border-border">
-                <CardHeader className="py-3 px-4">
-                  <CardTitle className="text-xs font-semibold text-foreground flex items-center gap-2">
-                    <HelpCircle className="w-4 h-4 text-primary" />
-                    How do I inspect and fix Quarantined ('E') rows?
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="text-xs text-muted-foreground pt-0 px-4 pb-3 leading-relaxed">
-                  Navigate to the <strong>Error Inspector</strong> tab or click the red <strong>Quarantined Errors</strong> filter badge on the Data Grid.
-                  Inspect the <code className="font-mono text-foreground font-semibold">RS_MESSAGE_TEXT</code> column to see the exact validation rule failed.
-                  You can click <strong>Export Quarantined Errors</strong> from the export menu, adjust the CSV in Excel or your ERP source, and re-import.
-                </CardContent>
-              </Card>
-
-              <Card className="bg-card border-border">
-                <CardHeader className="py-3 px-4">
-                  <CardTitle className="text-xs font-semibold text-foreground flex items-center gap-2">
-                    <HelpCircle className="w-4 h-4 text-primary" />
-                    What is the difference between Quarantined Error ('E') and Load Failed ('F')?
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="text-xs text-muted-foreground pt-0 px-4 pb-3 leading-relaxed">
-                  <strong>'E' (Quarantined Error)</strong> occurs during the pre-flight <strong>Dry Run Validation</strong> step (e.g. part code inactive, bin location not found). These rows never touch the ERP loader.
-                  <br />
-                  <strong>'F' (Load Execution Failed)</strong> occurs during live execution when a record that passed validation encounters a runtime conflict during ERP insertion (e.g. database deadlock, negative stock constraint, or batch concurrency limit).
-                </CardContent>
-              </Card>
-
-              <Card className="bg-card border-border">
-                <CardHeader className="py-3 px-4">
-                  <CardTitle className="text-xs font-semibold text-foreground flex items-center gap-2">
-                    <HelpCircle className="w-4 h-4 text-primary" />
-                    Will re-uploading a CSV overwrite existing live Ross ERP inventory?
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="text-xs text-muted-foreground pt-0 px-4 pb-3 leading-relaxed">
-                  No. Staging rows only reside in <code className="font-mono text-foreground font-semibold">FIN.KAS_DC_LOADS</code> or <code className="font-mono text-foreground font-semibold">FIN.KAS_SO_LOADS</code>.
-                  Live Ross ERP operational tables are only modified when you explicitly run <strong>Execute Loader</strong> in the <strong>Simulate & Load</strong> view on rows that have passed validation.
-                </CardContent>
-              </Card>
-
-              <Card className="bg-card border-border">
-                <CardHeader className="py-3 px-4">
-                  <CardTitle className="text-xs font-semibold text-foreground flex items-center gap-2">
-                    <HelpCircle className="w-4 h-4 text-primary" />
-                    Can my CSV contain comments or custom column names?
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="text-xs text-muted-foreground pt-0 px-4 pb-3 leading-relaxed">
-                  Yes. Lines starting with <code className="font-mono text-foreground font-semibold">!</code> (standard IAF comment markers) are ignored.
-                  Column headers are automatically normalized, meaning headers like <code className="font-mono text-foreground">Quantity 1</code>, <code className="font-mono text-foreground">QUANTITY_1</code>, <code className="font-mono text-foreground">uom 1</code>, and <code className="font-mono text-foreground">Best Before Date</code> are automatically recognized.
-                </CardContent>
-              </Card>
-
-              <Card className="bg-card border-border">
-                <CardHeader className="py-3 px-4">
-                  <CardTitle className="text-xs font-semibold text-foreground flex items-center gap-2">
-                    <HelpCircle className="w-4 h-4 text-primary" />
-                    What is the difference between "Clear Staged Data" and "Clean Inventory Tables"?
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="text-xs text-muted-foreground pt-0 px-4 pb-3 leading-relaxed space-y-1.5">
-                  <p>
-                    <strong className="text-foreground">Clear Staged Data (Trash icon):</strong> Truncates only the temporary staging table buffer (<code className="font-mono text-foreground">[FIN].[KAS_DC_LOADS]</code> or <code className="font-mono text-foreground">[FIN].[KAS_SO_LOADS]</code>). It never alters live ERP ledgers or warehouse inventory. Use this whenever you want to discard staged file rows and upload a new CSV file.
-                  </p>
-                  <p>
-                    <strong className="text-foreground">Clean Inventory Tables (Eraser action):</strong> Performs a targeted, warehouse-scoped purge of live Ross ERP inventory records <em>only</em> for the warehouses included in your staged dataset. It scans live tables (<code className="font-mono">INVENTORY_BALANCE</code>, <code className="font-mono">LPN_RECORDS</code>), presents a pre-flight count verification, and asks for confirmation (<code className="font-mono">CLEAN</code>) before purging. Use this to prepare warehouses for clean opening balances.
-                  </p>
-                </CardContent>
-              </Card>
-
-              <Card className="bg-card border-border">
-                <CardHeader className="py-3 px-4">
-                  <CardTitle className="text-xs font-semibold text-foreground flex items-center gap-2">
-                    <HelpCircle className="w-4 h-4 text-primary" />
-                    How do I create, modify, or re-create custom staging tables across schemas?
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="text-xs text-muted-foreground pt-0 px-4 pb-3 leading-relaxed space-y-1.5">
-                  <p>
-                    Click the <strong>Table Switcher</strong> button in the top navigation bar and select <strong>Manage Custom Tables</strong>.
-                  </p>
-                  <ul className="list-disc list-inside space-y-1 pl-1">
-                    <li><strong className="text-foreground">Create:</strong> Execute any DDL script on the <em>Create / Alter Table (DDL)</em> tab. The tool saves your executed script into the <em>Saved Creation Scripts</em> catalog automatically.</li>
-                    <li><strong className="text-foreground">Edit & Re-Create:</strong> Under the <em>Drop Table</em> tab, select your table and click <strong>Load DDL to Edit / Re-create</strong>. The tool restores your original creation query (or reverse-engineers DDL from live column metadata if created externally) directly into the editor. You can then drop the table and execute the updated script in seconds.</li>
-                    <li><strong className="text-foreground">Filter by Schema:</strong> Use the interactive schema pills (<code className="font-mono">[All]</code>, <code className="font-mono">[dbo]</code>, <code className="font-mono">[FIN]</code>) in the Table Switcher to instantly locate your tables.</li>
-                  </ul>
-                </CardContent>
-              </Card>
-            </div>
-
-            {/* Diagnostic Codes Reference */}
-            <Card className="bg-card border-border">
-              <CardHeader>
-                <CardTitle className="text-sm font-semibold text-foreground flex items-center gap-2">
-                  <AlertTriangle className="w-4 h-4 text-amber-500" />
-                  Ross Error Diagnostic Code Reference
-                </CardTitle>
-                <CardDescription className="text-xs text-muted-foreground">
-                  Common Ross ERP diagnostic message codes encountered during Dry Run validation:
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-2 text-xs">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 font-mono text-[11px]">
-                  <div className="p-3 rounded-lg bg-secondary/30 border border-border">
-                    <div className="flex items-center gap-2">
-                      <span className="text-rose-600 dark:text-rose-400 font-bold">P_71560:</span>
-                      <span className="text-foreground font-sans font-medium">Pack UOM Mismatch</span>
-                    </div>
-                    <p className="text-muted-foreground font-sans text-xs mt-1">
-                      Product has Packaged flag = 'Y' in Product Master, but CSV supplied capacity UOM or invalid packaging unit.
-                    </p>
-                  </div>
-
-                  <div className="p-3 rounded-lg bg-secondary/30 border border-border">
-                    <div className="flex items-center gap-2">
-                      <span className="text-rose-600 dark:text-rose-400 font-bold">P_10648 / P_42234:</span>
-                      <span className="text-foreground font-sans font-medium">Movement Code Missing</span>
-                    </div>
-                    <p className="text-muted-foreground font-sans text-xs mt-1">
-                      Movement code (<code className="text-foreground">BGNQOH</code>, <code className="text-foreground">BGNQC</code>, <code className="text-foreground">BGNQR</code>) is not defined in <code className="text-foreground">INVENTORY_MOVEMENTS_CONTROL</code>.
-                    </p>
-                  </div>
-
-                  <div className="p-3 rounded-lg bg-secondary/30 border border-border">
-                    <div className="flex items-center gap-2">
-                      <span className="text-amber-600 dark:text-amber-400 font-bold">P_82065:</span>
-                      <span className="text-foreground font-sans font-medium">Expired Lot Warning</span>
-                    </div>
-                    <p className="text-muted-foreground font-sans text-xs mt-1">
-                      Severity downgraded to informational in dcload routines to allow historical balance imports.
-                    </p>
-                  </div>
-
-                  <div className="p-3 rounded-lg bg-secondary/30 border border-border">
-                    <div className="flex items-center gap-2">
-                      <span className="text-amber-600 dark:text-amber-400 font-bold">P_13647:</span>
-                      <span className="text-foreground font-sans font-medium">Quantity Precision Adjusted</span>
-                    </div>
-                    <p className="text-muted-foreground font-sans text-xs mt-1">
-                      Informational warning indicating decimal quantity precision was adjusted to match the UOM precision mask.
-                    </p>
-                  </div>
                 </div>
               </CardContent>
             </Card>
