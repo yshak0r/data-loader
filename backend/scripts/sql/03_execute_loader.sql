@@ -1064,7 +1064,7 @@ SELECT
                  PM_SHIP_APPROVAL_STATUS, RCS_CONVERSION_STATUS, ATP_STATUS_START_DATE)
                 SELECT r.COMPANY_CODE, @Q_DOC_NBR, @Q_SOURCE_MODULE, r.IC_STATUS_CODE, GETDATE(), '', r.DIVISION,
                        '', '', '', 0,
-                       1, '', '', r.PART_CODE, r.IC_LOT_NUMBER, 0,
+                       1, @Q_MOVE, '', r.PART_CODE, r.IC_LOT_NUMBER, 0,
                        ISNULL(r.UOM_1, ''), '', '', '', '',
                        '', '', '', '',
                        '', '', GETDATE()
@@ -1074,7 +1074,8 @@ SELECT
             UPDATE QD
             SET QD.ORIGINAL_DOCUMENT_NUMBER   = @Q_ORIG_DOC_NBR,
                 QD.ORIGINAL_DOCUMENT_LINE     = @Q_HDR_DOC_LINE,
-                QD.ORIGINAL_DOCUMENT_SEQUENCE = @Q_ORIG_DOC_SEQ
+                QD.ORIGINAL_DOCUMENT_SEQUENCE = @Q_ORIG_DOC_SEQ,
+                QD.MOVEMENT_CODE              = @Q_MOVE      -- BGNQC / BGNQR, same movement code as the plate line / history
             FROM IC_QUALITY_DOCS QD
             WHERE QD.COMPANY_CODE = @Q_COMPANY_CODE
               AND QD.QUALITY_DOC_NBR = @Q_DOC_NBR
@@ -1539,7 +1540,7 @@ SELECT
                     IC_LT_TO_LINE_LOT_STAGE, IC_LT_TO_DOCSEQ_LOTSEQ_LINE, IC_LT_TO_STATUS, SOURCE_MODULE, DESCRIPTION, TRANSACTION_TYPE, 
                     MOVEMENT_CODE, SYSTEM_DATE, TRANSACTION_DATE, IC_MOVE_QUANTITY_1, UNIT_OF_MEASURE_1, IC_MOVE_QUANTITY_2, UNIT_OF_MEASURE_2)
                 SELECT H.COMPANY_CODE,'', H.WAREHOUSE, H.DOC_REFERENCE, H.SEQ_NO,
-                       0, '', '', '', H.PART_CODE, H.IC_LOT_NUMBER,
+                       0, '', 'I', H.WAREHOUSE, H.PART_CODE, H.IC_LOT_NUMBER,
                        0, H.IC_STATUS_CODE, @Q_SOURCE_MODULE, LEFT(ISNULL(IMC.MOVEMENT_DESCRIPTION, ''), COL_LENGTH('IC_LOT_TRACE', 'DESCRIPTION')), '',
                        H.MOVEMENT_CODE, @HNow, @HToday, H.QTY_1, ISNULL(H.UOM_1, ''), H.QTY_2, ISNULL(H.UOM_2, '')
                 FROM #H H
