@@ -724,14 +724,34 @@ export const App: React.FC = () => {
       {/* Hardware Authorization & Activation Modal */}
       <ActivationModal
         open={isActivationOpen}
-        onOpenChange={setIsActivationOpen}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen) {
+            if (!licenseStatus.isActivated) {
+              // Never allow dismissing activation when no valid license is active
+              return;
+            }
+            setIsActivationOpen(false);
+            if (licenseStatus.requiresAuth && !licenseStatus.isAuthenticated) {
+              // Restore operator login lock so closing Change License cannot bypass auth
+              setIsOperatorLoginOpen(true);
+            }
+          } else {
+            setIsActivationOpen(true);
+          }
+        }}
         status={licenseStatus}
         canDismiss={licenseStatus.isActivated}
         onActivationSuccess={(newStatus) => {
           setLicenseStatus(newStatus);
-          setIsActivationOpen(false);
-          if (newStatus.requiresAuth && !newStatus.isAuthenticated) {
-            setIsOperatorLoginOpen(true);
+          if (!newStatus.isActivated) {
+            // Keep activation modal open after revoking a license
+            setIsOperatorLoginOpen(false);
+            setIsActivationOpen(true);
+          } else {
+            setIsActivationOpen(false);
+            if (newStatus.requiresAuth && !newStatus.isAuthenticated) {
+              setIsOperatorLoginOpen(true);
+            }
           }
         }}
       />
